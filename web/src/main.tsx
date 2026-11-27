@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { AlertTriangle, BarChart3, Bell, Calculator, ChevronDown, CircleHelp, ClipboardList, ContactRound, Globe2, LayoutDashboard, LogOut, Menu, Package, Search, Settings2, Truck, X } from 'lucide-react';
+import { AlertTriangle, BarChart3, Bell, Boxes, Calculator, ChevronDown, CircleHelp, ClipboardList, ContactRound, Globe2, LayoutDashboard, LogOut, Menu, Package, Search, Settings2, Truck, X } from 'lucide-react';
 import { Access, PublicTracking, Settings } from './access';
 import { Dashboard, Analytics } from './dashboard';
 import { AddressBook, ContactForm } from './contacts';
 import { ExceptionInbox } from './exceptions';
 import { DispatchQueue, ManifestDetail } from './dispatch';
+import { InventorySimulator } from './inventory';
 import { api, ApiError, message, type Account, type Carrier, type Contact, type Shipment } from './data';
 import { CarrierDirectory, RateCalculator, ShipmentDetail, ShipmentForm, ShipmentIndex, ShippingLabel } from './shipments';
 import { Brand, Empty, ErrorNotice, Link, navigate } from './ui';
@@ -21,6 +22,7 @@ const navigation = [
   { name: 'Rate calculator', href: '/rates', icon: Calculator },
   { name: 'Carriers', href: '/carriers', icon: Truck },
   { name: 'Analytics', href: '/analytics', icon: BarChart3 },
+  { name: 'Inventory simulator', href: '/inventory', icon: Boxes },
 ];
 
 function App() {
@@ -149,6 +151,7 @@ function Workspace({ account, path, search, onAccount }: { account: Account; pat
   else if (!shipments) content = <div className="panel form-card" role="status">Loading shipments…</div>;
   else if (path === '/' || path === '/login' || path === '/register') content = <Dashboard {...{ account, shipments, carriers }}/>;
   else if (path === '/settings') content = <Settings account={account} onSave={onAccount} onPasswordChange={endSession}/>;
+  else if (path === '/inventory') content = <InventorySimulator/>;
   else if (path === '/rates') content = <RateCalculator/>;
   else if (path === '/exceptions') content = <ExceptionInbox {...{ shipments, carriers }}/>;
   else if (path === '/dispatch') content = <DispatchQueue {...{ shipments, carriers }} onDispatch={saveShipments} onReload={reloadShipments}/>;
