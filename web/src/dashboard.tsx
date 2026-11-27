@@ -71,7 +71,7 @@ function Volume({ shipments }: { shipments: Shipment[] }) {
 }
 
 function ActivityPanel({ shipments }: { shipments: Shipment[] }) {
-  const events = shipments.flatMap(shipment => shipment.events.slice(-4).map(event => ({ ...event, tracking: shipment.tracking, reference: shipment.reference })))
+  const events = shipments.flatMap(shipment => shipment.events.slice(-4).reverse().map(event => ({ ...event, tracking: shipment.tracking, reference: shipment.reference })))
     .sort((first, second) => second.at.localeCompare(first.at)).slice(0, 4);
   return <section className="panel activity-panel">
     <div className="panel-heading"><div><h2>Recent activity</h2><p>Latest updates across your network.</p></div><Activity size={19}/></div>

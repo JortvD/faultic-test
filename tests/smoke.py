@@ -143,6 +143,15 @@ def main():
         assert dispatched["version"] == record["version"] + 1
     assert owner.request("/api/shipments/" + mixed["tracking"])["status"] == "ready"
 
+    edge = ready_shipment(owner, "EVENT-LIMIT")
+    edge_path = "/api/shipments/" + edge["tracking"] + "/events"
+    event = {"status": "in_transit", "note": "Carrier scan", "location": lane["origin"]}
+    while len(edge["events"]) < 99:
+        edge = owner.request(edge_path, method="POST", body={**event, "version": edge["version"]})
+    owner.request(edge_path, method="POST", body={**event, "version": edge["version"]}, expect=409)
+    final = owner.request(edge_path, method="POST", body={**event, "status": "delivered", "version": edge["version"]})
+    assert final["status"] == "delivered" and len(final["events"]) == 100
+
     owner.request("/api/me", method="PATCH", body={"name": "Updated", "company": "Updated workspace"})
 
     next_password = "ship-with-a-new-secret"
@@ -159,7 +168,10 @@ def main():
 
     demo = Client()
     assert demo.request("/api/auth/demo", method="POST")["demo"]
-    assert len(demo.request("/api/shipments")) == 36
+    samples = demo.request("/api/shipments")
+    assert len(samples) == 36
+    scans = [event["at"] for event in samples[0]["events"]]
+    assert len(scans) == len(set(scans)) and scans == sorted(scans)
     assert len(demo.request("/api/contacts")) == 6
     assert len(demo.request("/api/manifests")) == 1
     print("Passed: auth, session revocation, account isolation, quotes, shipment lifecycle, address book, concurrent dispatch, tracking privacy, and demo.")

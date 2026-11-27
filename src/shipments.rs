@@ -588,7 +588,7 @@ pub fn seed(db: &Connection, owner: i64) -> Result<()> {
     for index in (0..36).rev() {
         let (origin, destination, recipient, address) = lanes[index % lanes.len()];
         let age = (index / 3 + usize::from(index > 22)) as i64;
-        let created = today - Duration::days(age) - Duration::minutes(index as i64 * 71);
+        let created = today - Duration::days(age) - Duration::minutes(104 + index as i64 * 71);
         let international = index % lanes.len() == 4;
         let delivery_status = recent.get(index).copied().unwrap_or(match index % 13 {
             0 | 4 => Status::InTransit,
