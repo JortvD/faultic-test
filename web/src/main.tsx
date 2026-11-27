@@ -1,11 +1,12 @@
 import { useEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { AlertTriangle, BarChart3, Bell, Calculator, ChevronDown, CircleHelp, ClipboardList, ContactRound, Globe2, LayoutDashboard, LogOut, Menu, Package, Search, Settings2, Truck, X } from 'lucide-react';
+import { AlertTriangle, BarChart3, Bell, Calculator, ChevronDown, CircleHelp, ClipboardList, ContactRound, Globe2, LayoutDashboard, LogOut, Menu, Package, Route as RouteIcon, Search, Settings2, Truck, X } from 'lucide-react';
 import { Access, PublicTracking, Settings } from './access';
 import { Dashboard, Analytics } from './dashboard';
 import { AddressBook, ContactForm } from './contacts';
 import { ExceptionInbox } from './exceptions';
 import { DispatchQueue, ManifestDetail } from './dispatch';
+import { DispatchPlanner } from './planner';
 import { api, ApiError, message, type Account, type Carrier, type Contact, type Shipment } from './data';
 import { CarrierDirectory, RateCalculator, ShipmentDetail, ShipmentForm, ShipmentIndex, ShippingLabel } from './shipments';
 import { Brand, Empty, ErrorNotice, Link, navigate } from './ui';
@@ -15,6 +16,7 @@ const navigation = [
   { name: 'Overview', href: '/', icon: LayoutDashboard },
   { name: 'Shipments', href: '/shipments', icon: Package },
   { name: 'Dispatch', href: '/dispatch', icon: ClipboardList },
+  { name: 'Dispatch planner', href: '/planner', icon: RouteIcon },
   { name: 'Exceptions', href: '/exceptions', icon: AlertTriangle },
   { name: 'Address book', href: '/contacts', icon: ContactRound },
   { name: 'Rate calculator', href: '/rates', icon: Calculator },
@@ -125,6 +127,7 @@ function Workspace({ account, path, search, onAccount }: { account: Account; pat
   else if (!shipments) content = <div className="panel form-card" role="status">Loading shipments…</div>;
   else if (path === '/' || path === '/login' || path === '/register') content = <Dashboard {...{ account, shipments, carriers }}/>;
   else if (path === '/settings') content = <Settings account={account} onSave={onAccount} onPasswordChange={() => { onAccount(null); navigate('/login', true); }}/>;
+  else if (path === '/planner') content = <DispatchPlanner/>;
   else if (path === '/rates') content = <RateCalculator/>;
   else if (path === '/exceptions') content = <ExceptionInbox {...{ shipments, carriers }}/>;
   else if (path === '/dispatch') content = <DispatchQueue {...{ shipments, carriers }} onDispatch={saveShipments} onReload={reloadShipments}/>;
