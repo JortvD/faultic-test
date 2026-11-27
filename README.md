@@ -9,7 +9,7 @@ docker compose up -d --build --wait
 curl -fsS http://127.0.0.1:18084/readyz
 ```
 
-Open http://127.0.0.1:18084. Create an account with or without sample shipments, or select **Explore demo workspace**. A demo session expires after 24 hours. Account owners can update their profile and change their password, which revokes existing sessions. Each account or demo session has its own shipment records. The `fieldline` Compose volume stores accounts, sessions, and shipments across restarts.
+Open http://127.0.0.1:18084. Create an account with or without sample shipments, contacts, and a dispatch record, or select **Explore demo workspace**. A demo session expires after 24 hours. Account owners can update their profile and change their password, which revokes existing sessions. Each account or demo session has its own shipment records. The `fieldline` Compose volume stores accounts, sessions, and shipments across restarts.
 
 ### Develop locally
 
@@ -28,6 +28,9 @@ With Rust 1.100 and Node.js 24 installed, run `npm --prefix web ci` and `cargo r
 
 - Compare estimates for domestic and international parcels. Rates use the greater of actual and dimensional weight, rounded up to the next half kilogram. All fees are estimates in USD, and transit times use calendar days.
 - Create and edit draft or ready shipments. Record ready, pick-up, in-transit, exception, delivery, or cancellation milestones. The server enforces the allowed transitions and rejects changes based on a stale shipment version.
+- Save and search recipient details in the address book, autofill a shipment, or duplicate an existing shipment as a new draft.
+- Dispatch up to 100 ready shipments from the same origin via the same carrier. A dispatch records the pickup and updates the whole batch atomically. Open its saved manifest to review or print the handoff.
+- Triage the exception inbox by reason, overdue status, or shipment details. Record a new milestone to resume transit or confirm delivery.
 - Filter shipments by reference, recipient, route, carrier, status, and overdue status. Export matching rows as CSV and print internal shipping labels.
 - Review activity, exceptions, on-time delivery, and estimated freight costs by carrier.
 - After a shipment leaves draft, share its tracking link with customers. Public tracking exposes its status, ETA, and milestone timestamps. Recipient details, addresses, and internal notes require the owning account.
@@ -41,9 +44,11 @@ cargo fmt --check
 cargo clippy --locked --all-targets -- -D warnings
 npm --prefix web run build
 python3 tests/smoke.py http://127.0.0.1:18084
+npm --prefix web exec -- playwright install chromium
+npm --prefix web run test:browser -- http://127.0.0.1:18084
 ```
 
-The smoke script creates and modifies two test accounts. Use a development instance.
+The smoke script seeds isolated test accounts and exercises quotes, contacts, dispatch, tracking, and session revocation. Use a development instance.
 
 ## Historical Faultic fixture
 
