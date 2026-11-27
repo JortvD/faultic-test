@@ -1,0 +1,19 @@
+name: faultic-logistics
+services:
+  fieldline:
+    build: .
+    environment:
+      FIELDLINE_ORIGIN: "${FIELDLINE_ORIGIN:-}"
+      FIELDLINE_SECURE_COOKIES: "${FIELDLINE_SECURE_COOKIES:-0}"
+    ports:
+      - "127.0.0.1:${FIELDLINE_PORT:-18084}:8080"
+    volumes:
+      - fieldline:/var/lib/fieldline
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "http://127.0.0.1:8080/readyz"]
+      interval: 3s
+      timeout: 2s
+      retries: 10
+    restart: unless-stopped
+volumes:
+  fieldline:
