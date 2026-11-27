@@ -167,9 +167,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         listener,
         router.into_make_service_with_connect_info::<SocketAddr>(),
     )
-    .with_graceful_shutdown(async {
-        let _ = tokio::signal::ctrl_c().await;
-    })
+    .with_graceful_shutdown(shutdown())
     .await?;
     Ok(())
+}
+
+async fn shutdown() {
+    #[cfg(unix)]
+    if let Ok(mut terminate) =
+        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+    {
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => {},
+            _ = terminate.recv() => {},
+        }
+        return;
+    }
+    let _ = tokio::signal::ctrl_c().await;
 }
