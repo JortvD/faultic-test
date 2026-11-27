@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use axum::{
     Json,
     extract::{Path, State},
@@ -126,6 +128,17 @@ impl Details {
     }
 }
 
+#[derive(Clone, Copy, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum ExceptionReason {
+    AddressIssue,
+    DeliveryAttempt,
+    CarrierDelay,
+    CustomsHold,
+    Damage,
+    Other,
+}
+
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct Event {
@@ -133,6 +146,8 @@ struct Event {
     at: String,
     location: String,
     note: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    reason: Option<ExceptionReason>,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -145,6 +160,8 @@ pub struct Shipment {
     eta: NaiveDate,
     cost_cents: u64,
     chargeable_kg: f64,
+    #[serde(default)]
+    manifest: Option<String>,
     #[serde(flatten)]
     details: Details,
     events: Vec<Event>,
@@ -263,11 +280,13 @@ fn insert(
         eta,
         cost_cents: quote.cost_cents,
         chargeable_kg: quote.chargeable_kg,
+        manifest: None,
         events: vec![Event {
             status,
             at: created_at.clone(),
             location: details.route.origin.clone(),
             note: "Shipment created.".to_owned(),
+            reason: None,
         }],
         details,
         created_at,
@@ -330,7 +349,7 @@ pub async fn create(
 ) -> Result<(StatusCode, Json<Shipment>)> {
     let quote = input.validate(None)?;
     let mut db = app.store.lock()?;
-    let tx = db.transaction()?;
+    let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     let total: u32 = tx.query_row(
         "SELECT count(*) FROM shipments WHERE account_id = ?1",
         [account.id],
@@ -359,8 +378,9 @@ pub async fn edit(
     Path(tracking): Path<String>,
     Json(mut input): Json<Edit>,
 ) -> Result<Json<Shipment>> {
-    let db = app.store.lock()?;
-    let mut shipment = lookup(&db, account.id, &tracking)?;
+    let mut db = app.store.lock()?;
+    let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+    let mut shipment = lookup(&tx, account.id, &tracking)?;
     if shipment.version != input.version {
         return Err(Error::conflict(
             "This shipment changed. Reload it before editing.",
@@ -377,7 +397,8 @@ pub async fn edit(
     shipment.chargeable_kg = quote.chargeable_kg;
     shipment.details = input.details;
     shipment.version += 1;
-    save(&db, account.id, &shipment)?;
+    save(&tx, account.id, &shipment)?;
+    tx.commit()?;
     Ok(Json(shipment))
 }
 
@@ -387,6 +408,8 @@ pub struct StatusUpdate {
     status: Status,
     location: String,
     note: String,
+    #[serde(default)]
+    reason: Option<ExceptionReason>,
 }
 
 pub async fn update_status(
@@ -400,13 +423,18 @@ pub async fn update_status(
         100,
         "Enter an event location of up to 100 characters.",
     )?;
-    let note = required(
-        &input.note,
-        400,
-        "Enter an event note of up to 400 characters.",
-    )?;
-    let db = app.store.lock()?;
-    let mut shipment = lookup(&db, account.id, &tracking)?;
+    let note = input.note.trim().replace("\r\n", "\n");
+    if note.is_empty()
+        || note.chars().count() > 400
+        || note.chars().any(|ch| ch.is_control() && ch != '\n')
+    {
+        return Err(Error::invalid(
+            "Enter an event note of up to 400 characters.",
+        ));
+    }
+    let mut db = app.store.lock()?;
+    let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+    let mut shipment = lookup(&tx, account.id, &tracking)?;
     if shipment.version != input.version {
         return Err(Error::conflict(
             "This shipment changed. Reload it before adding an event.",
@@ -417,9 +445,9 @@ pub async fn update_status(
             "That status change is unavailable for this shipment.",
         ));
     }
-    if shipment.events.len() >= 100 {
+    if shipment.events.len() >= 99 && input.status != Status::Delivered {
         return Err(Error::conflict(
-            "This shipment has reached its 100 event limit.",
+            "Only the final delivery event can be recorded on this shipment.",
         ));
     }
     shipment.status = input.status;
@@ -429,8 +457,11 @@ pub async fn update_status(
         at: now(),
         location,
         note,
+        reason: (input.status == Status::Exception)
+            .then_some(input.reason.unwrap_or(ExceptionReason::Other)),
     });
-    save(&db, account.id, &shipment)?;
+    save(&tx, account.id, &shipment)?;
+    tx.commit()?;
     Ok(Json(shipment))
 }
 
@@ -543,6 +574,9 @@ pub fn seed(db: &Connection, owner: i64) -> Result<()> {
             "1120 SE Madison Street",
         ),
     ];
+    for (_, city, recipient, address) in lanes {
+        crate::contacts::seed(db, owner, recipient, city, address)?;
+    }
     let recent = [
         Status::InTransit,
         Status::Delivered,
@@ -638,11 +672,223 @@ pub fn seed(db: &Connection, owner: i64) -> Result<()> {
                 at: at.min(today).to_rfc3339(),
                 location: location.into(),
                 note: note.into(),
+                reason: (milestone == Status::Exception)
+                    .then_some(ExceptionReason::DeliveryAttempt),
             });
         }
         shipment.status = status;
         shipment.version += progression.len() as u32;
+        if index == 0 {
+            let id = manifest_id()?;
+            let departure = shipment
+                .events
+                .last_mut()
+                .filter(|event| event.status == Status::InTransit)
+                .ok_or_else(|| Error::internal("sample shipment requires a dispatch event"))?;
+            departure.note = format!("Dispatched on manifest {id}.");
+            let manifest = Manifest {
+                id: id.clone(),
+                reference: "Dock pickup 501".into(),
+                notes: "Collected at outbound dock 2.".into(),
+                carrier: carrier.id.into(),
+                origin: origin.into(),
+                dispatched_at: departure.at.clone(),
+                dispatched_by: "Alex Morgan".into(),
+                shipments: vec![ManifestItem::from(&shipment)],
+            };
+            shipment.manifest = Some(id);
+            insert_manifest(db, owner, &manifest)?;
+        }
         save(db, owner, &shipment)?;
     }
+    Ok(())
+}
+
+#[derive(Deserialize)]
+pub struct Dispatch {
+    reference: String,
+    notes: String,
+    shipments: Vec<DispatchItem>,
+}
+
+#[derive(Deserialize)]
+struct DispatchItem {
+    tracking: String,
+    version: u32,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Manifest {
+    id: String,
+    reference: String,
+    notes: String,
+    carrier: String,
+    origin: String,
+    dispatched_at: String,
+    dispatched_by: String,
+    shipments: Vec<ManifestItem>,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ManifestItem {
+    tracking: String,
+    reference: String,
+    destination: String,
+    weight_kg: f64,
+}
+
+pub async fn list_manifests(
+    State(app): State<App>,
+    SignedIn(account): SignedIn,
+) -> Result<Json<Vec<Manifest>>> {
+    let db = app.store.lock()?;
+    let mut stmt =
+        db.prepare("SELECT data FROM manifests WHERE account_id = ?1 ORDER BY rowid DESC")?;
+    let rows = stmt.query_map([account.id], |row| row.get::<_, String>(0))?;
+    let mut manifests = Vec::new();
+    for row in rows {
+        manifests.push(serde_json::from_str(&row?)?);
+    }
+    Ok(Json(manifests))
+}
+
+pub async fn manifest_detail(
+    State(app): State<App>,
+    SignedIn(account): SignedIn,
+    Path(id): Path<String>,
+) -> Result<Json<Manifest>> {
+    let data: String = app
+        .store
+        .lock()?
+        .query_row(
+            "SELECT data FROM manifests WHERE id = ?1 AND account_id = ?2",
+            params![id, account.id],
+            |row| row.get(0),
+        )
+        .optional()?
+        .ok_or_else(Error::missing)?;
+    Ok(Json(serde_json::from_str(&data)?))
+}
+
+#[derive(Serialize)]
+pub struct DispatchResult {
+    manifest: Manifest,
+    shipments: Vec<Shipment>,
+}
+
+pub async fn dispatch_manifest(
+    State(app): State<App>,
+    SignedIn(account): SignedIn,
+    Json(input): Json<Dispatch>,
+) -> Result<(StatusCode, Json<DispatchResult>)> {
+    let reference = required(
+        &input.reference,
+        100,
+        "Enter a pickup reference of up to 100 characters.",
+    )?;
+    let notes = if input.notes.trim().is_empty() {
+        String::new()
+    } else {
+        required(
+            &input.notes,
+            400,
+            "Enter a pickup note of up to 400 characters.",
+        )?
+    };
+    if !(1..=100).contains(&input.shipments.len()) {
+        return Err(Error::invalid("Select 1–100 shipments."));
+    }
+    let mut db = app.store.lock()?;
+    let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+    let mut checked = HashSet::new();
+    let mut shipments = Vec::with_capacity(input.shipments.len());
+    for item in &input.shipments {
+        if !checked.insert(&item.tracking) {
+            return Err(Error::invalid(
+                "Each shipment can appear once per dispatch.",
+            ));
+        }
+        let shipment = lookup(&tx, account.id, &item.tracking)?;
+        if shipment.version != item.version || shipment.status != Status::Ready {
+            return Err(Error::conflict(
+                "A shipment changed or is no longer ready. Reload the dispatch queue and try again.",
+            ));
+        }
+        shipments.push(shipment);
+    }
+    let first = &shipments[0];
+    let carrier = first.details.carrier.clone();
+    let origin = first.details.route.origin.clone();
+    if shipments.iter().any(|shipment| {
+        shipment.details.carrier != carrier
+            || !shipment.details.route.origin.eq_ignore_ascii_case(&origin)
+    }) {
+        return Err(Error::invalid(
+            "Dispatch shipments with the same carrier and origin.",
+        ));
+    }
+
+    let id = manifest_id()?;
+    let dispatched_at = now();
+    let mut rows = Vec::with_capacity(shipments.len());
+    for shipment in &mut shipments {
+        shipment.status = Status::InTransit;
+        shipment.version += 1;
+        shipment.manifest = Some(id.clone());
+        shipment.events.push(Event {
+            status: Status::InTransit,
+            at: dispatched_at.clone(),
+            location: shipment.details.route.origin.clone(),
+            note: format!("Dispatched on manifest {id}."),
+            reason: None,
+        });
+        save(&tx, account.id, shipment)?;
+        rows.push(ManifestItem::from(&*shipment));
+    }
+    let manifest = Manifest {
+        id,
+        reference,
+        notes,
+        carrier,
+        origin,
+        dispatched_at,
+        dispatched_by: account.name,
+        shipments: rows,
+    };
+    insert_manifest(&tx, account.id, &manifest)?;
+    tx.commit()?;
+    Ok((
+        StatusCode::CREATED,
+        Json(DispatchResult {
+            manifest,
+            shipments,
+        }),
+    ))
+}
+
+impl From<&Shipment> for ManifestItem {
+    fn from(shipment: &Shipment) -> Self {
+        Self {
+            tracking: shipment.tracking.clone(),
+            reference: shipment.details.reference.clone(),
+            destination: shipment.details.route.destination.clone(),
+            weight_kg: shipment.details.route.weight_kg,
+        }
+    }
+}
+
+fn manifest_id() -> Result<String> {
+    let mut bytes = [0; 10];
+    random(&mut bytes)?;
+    Ok(format!("MF-{}", hex::encode_upper(bytes)))
+}
+
+fn insert_manifest(db: &Connection, owner: i64, manifest: &Manifest) -> Result<()> {
+    db.execute(
+        "INSERT INTO manifests VALUES (?1, ?2, ?3)",
+        params![manifest.id, owner, serde_json::to_string(manifest)?],
+    )?;
     Ok(())
 }

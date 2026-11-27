@@ -25,3 +25,22 @@ CREATE TABLE IF NOT EXISTS shipments (
     data TEXT NOT NULL CHECK(json_valid(data))
 ) STRICT;
 CREATE INDEX IF NOT EXISTS shipments_account ON shipments(account_id);
+
+CREATE TABLE IF NOT EXISTS contacts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    city TEXT NOT NULL,
+    address TEXT NOT NULL,
+    email TEXT NOT NULL,
+    phone TEXT NOT NULL,
+    version INTEGER NOT NULL DEFAULT 1
+) STRICT;
+CREATE INDEX IF NOT EXISTS contacts_account ON contacts(account_id);
+
+CREATE TABLE IF NOT EXISTS manifests (
+    id TEXT PRIMARY KEY,
+    account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+    data TEXT NOT NULL CHECK(json_valid(data))
+) STRICT;
+CREATE INDEX IF NOT EXISTS manifests_account ON manifests(account_id);

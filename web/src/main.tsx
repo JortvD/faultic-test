@@ -1,9 +1,12 @@
 import { useEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { BarChart3, Bell, Calculator, ChevronDown, CircleHelp, Globe2, LayoutDashboard, LogOut, Menu, Package, Search, Settings2, Truck, X } from 'lucide-react';
+import { AlertTriangle, BarChart3, Bell, Calculator, ChevronDown, CircleHelp, ClipboardList, ContactRound, Globe2, LayoutDashboard, LogOut, Menu, Package, Search, Settings2, Truck, X } from 'lucide-react';
 import { Access, PublicTracking, Settings } from './access';
 import { Dashboard, Analytics } from './dashboard';
-import { api, ApiError, message, type Account, type Carrier, type Shipment } from './data';
+import { AddressBook, ContactForm } from './contacts';
+import { ExceptionInbox } from './exceptions';
+import { DispatchQueue, ManifestDetail } from './dispatch';
+import { api, ApiError, message, type Account, type Carrier, type Contact, type Shipment } from './data';
 import { CarrierDirectory, RateCalculator, ShipmentDetail, ShipmentForm, ShipmentIndex, ShippingLabel } from './shipments';
 import { Brand, Empty, ErrorNotice, Link, navigate } from './ui';
 import './styles.css';
@@ -11,6 +14,9 @@ import './styles.css';
 const navigation = [
   { name: 'Overview', href: '/', icon: LayoutDashboard },
   { name: 'Shipments', href: '/shipments', icon: Package },
+  { name: 'Dispatch', href: '/dispatch', icon: ClipboardList },
+  { name: 'Exceptions', href: '/exceptions', icon: AlertTriangle },
+  { name: 'Address book', href: '/contacts', icon: ContactRound },
   { name: 'Rate calculator', href: '/rates', icon: Calculator },
   { name: 'Carriers', href: '/carriers', icon: Truck },
   { name: 'Analytics', href: '/analytics', icon: BarChart3 },
@@ -23,8 +29,13 @@ function App() {
   const [sessionAttempt, setSessionAttempt] = useState(0);
   useEffect(() => {
     function change() { setRoute(window.location.pathname + window.location.search); }
+    function expire() { setAccount(null); }
     window.addEventListener('popstate', change);
-    return () => window.removeEventListener('popstate', change);
+    window.addEventListener('fieldline-session-expired', expire);
+    return () => {
+      window.removeEventListener('popstate', change);
+      window.removeEventListener('fieldline-session-expired', expire);
+    };
   }, []);
   useEffect(() => {
     const controller = new AbortController();
@@ -39,7 +50,7 @@ function App() {
   const path = queryStart < 0 ? route : route.slice(0, queryStart);
   const search = queryStart < 0 ? '' : route.slice(queryStart + 1);
   useEffect(() => {
-    const name = navigation.find(item => item.href === path)?.name
+    const name = navigation.find(item => item.href === path || (item.href !== '/' && path.startsWith(item.href + '/')))?.name
       ?? (path === '/track' ? 'Track shipment' : path === '/settings' ? 'Settings' : path.startsWith('/shipments') ? 'Shipments' : 'Workspace');
     document.title = name + ' · Fieldline Logistics';
   }, [path]);
@@ -54,6 +65,7 @@ function App() {
 function Workspace({ account, path, search, onAccount }: { account: Account; path: string; search: string; onAccount: (account: Account | null) => void }) {
   const [shipments, setShipments] = useState<Shipment[]>();
   const [carriers, setCarriers] = useState<Carrier[]>([]);
+  const [contacts, setContacts] = useState<Contact[]>([]);
   const [loadError, setLoadError] = useState('');
   const [sessionError, setSessionError] = useState('');
   const [attempt, setAttempt] = useState(0);
@@ -73,8 +85,9 @@ function Workspace({ account, path, search, onAccount }: { account: Account; pat
   }, [mobileOpen]);
   useEffect(() => {
     const controller = new AbortController();
-    Promise.all([api<Shipment[]>('/shipments', { signal: controller.signal }), api<Carrier[]>('/carriers', { signal: controller.signal })])
-      .then(([records, services]) => { setShipments(records); setCarriers(services); })
+    const options = { signal: controller.signal };
+    Promise.all([api<Shipment[]>('/shipments', options), api<Carrier[]>('/carriers', options), api<Contact[]>('/contacts', options)])
+      .then(([records, services, addressBook]) => { setShipments(records); setCarriers(services); setContacts(addressBook); })
       .catch(failure => {
         if (controller.signal.aborted) return;
         if (failure instanceof ApiError && failure.status === 401) { onAccount(null); navigate('/login', true); }
@@ -83,19 +96,27 @@ function Workspace({ account, path, search, onAccount }: { account: Account; pat
     return () => controller.abort();
   }, [attempt, onAccount]);
 
-  function saveShipment(record: Shipment) {
+  function saveShipments(records: Shipment[]) {
+    const updated = new Map(records.map(record => [record.tracking, record]));
     setShipments(previous => {
-      if (!previous) return [record];
-      return previous.some(shipment => shipment.tracking === record.tracking) ? previous.map(shipment => shipment.tracking === record.tracking ? record : shipment) : [record, ...previous];
+      const existing = previous ?? [];
+      const known = new Set(existing.map(record => record.tracking));
+      return [...records.filter(record => !known.has(record.tracking)), ...existing.map(record => updated.get(record.tracking) ?? record)];
     });
   }
+  function saveShipment(record: Shipment) { saveShipments([record]); }
+  function saveContact(contact: Contact) {
+    setContacts(previous => [...previous.filter(item => item.id !== contact.id), contact]);
+  }
+  async function reloadContacts() { setContacts(await api<Contact[]>('/contacts')); }
+  async function reloadShipments() { setShipments(await api<Shipment[]>('/shipments')); }
   async function signOut() {
     setSigningOut(true); setSessionError('');
     try { await api('/auth/logout', { method: 'POST' }); onAccount(null); navigate('/login', true); }
     catch (failure) { setSessionError(message(failure)); setSigningOut(false); }
   }
   const shipPath = path.match(/^\/shipments\/(FL-[A-F0-9]{20})(?:\/(edit|label))?$/);
-  const displayPath = navigation.find(item => item.href === path)?.name ?? (path === '/settings' ? 'Settings' : path.startsWith('/shipments') ? 'Shipments' : 'Overview');
+  const displayPath = navigation.find(item => item.href === path || (item.href !== '/' && path.startsWith(item.href + '/')))?.name ?? (path === '/settings' ? 'Settings' : 'Overview');
   const alerts = shipments?.filter(shipment => shipment.status === 'exception').length ?? 0;
   const initials = account.name.trim().split(/\s+/).slice(0, 2).map(name => Array.from(name)[0]?.toUpperCase()).join('');
   const query = new URLSearchParams(search);
@@ -105,14 +126,22 @@ function Workspace({ account, path, search, onAccount }: { account: Account; pat
   else if (path === '/' || path === '/login' || path === '/register') content = <Dashboard {...{ account, shipments, carriers }}/>;
   else if (path === '/settings') content = <Settings account={account} onSave={onAccount} onPasswordChange={() => { onAccount(null); navigate('/login', true); }}/>;
   else if (path === '/rates') content = <RateCalculator/>;
+  else if (path === '/exceptions') content = <ExceptionInbox {...{ shipments, carriers }}/>;
+  else if (path === '/dispatch') content = <DispatchQueue {...{ shipments, carriers }} onDispatch={saveShipments} onReload={reloadShipments}/>;
+  else if (/^\/dispatch\/MF-[A-F0-9]{20}$/.test(path)) content = <ManifestDetail key={path} id={path.slice('/dispatch/'.length)} carriers={carriers}/>;
+  else if (path === '/contacts') content = <AddressBook contacts={contacts}/>;
+  else if (path === '/contacts/new' || /^\/contacts\/[0-9]+$/.test(path)) {
+    const contact = contacts.find(item => item.id === Number(path.slice('/contacts/'.length)));
+    if (path === '/contacts/new' || contact) content = <ContactForm key={path + (contact?.version ?? '')} contact={contact} onSave={saveContact} onRemove={id => setContacts(previous => previous.filter(item => item.id !== id))} onReload={reloadContacts}/>;
+  }
   else if (path === '/carriers') content = <CarrierDirectory {...{ shipments, carriers }}/>;
   else if (path === '/analytics') content = <Analytics {...{ shipments, carriers }}/>;
   else if (path === '/shipments') content = <ShipmentIndex key={search} {...{ shipments, carriers, query }}/>;
-  else if (path === '/shipments/new') content = <ShipmentForm key={path + search} {...{ carriers, query }} onSave={saveShipment}/>;
+  else if (path === '/shipments/new') content = <ShipmentForm key={path + search} source={shipments.find(item => item.tracking === query.get('copy'))} {...{ carriers, contacts, query }} onSave={saveShipment}/>;
   else if (shipPath) {
     const shipment = shipments.find(record => record.tracking === shipPath[1]);
     if (shipment && shipPath[2] === 'edit' && ['draft', 'ready'].includes(shipment.status)) {
-      content = <ShipmentForm key={path + shipment.version} existing={shipment} {...{ carriers, query }} onSave={saveShipment}/>;
+      content = <ShipmentForm key={path + shipment.version} existing={shipment} {...{ carriers, contacts, query }} onSave={saveShipment}/>;
     } else if (shipment && shipPath[2] === 'label' && shipment.status !== 'cancelled') {
       content = <ShippingLabel shipment={shipment}/>;
     } else if (shipment) {
@@ -143,7 +172,7 @@ function Workspace({ account, path, search, onAccount }: { account: Account; pat
         <div className="top-actions"><form className="top-search" onSubmit={event => {
           event.preventDefault(); navigate('/shipments?q=' + encodeURIComponent(searchText.trim()));
         }}><Search size={17}/><input aria-label="Search workspace shipments" placeholder="Search shipments" value={searchText} onChange={event => setSearchText(event.target.value)}/></form>
-          <Link className="icon-button notification" aria-label={alerts + ' shipments need attention. View exceptions'} title="View exceptions" href="/shipments?status=exception"><Bell size={20}/>{alerts > 0 && <span/>}</Link>
+          <Link className="icon-button notification" aria-label={alerts + ' shipments need attention. View exceptions'} title="View exceptions" href="/exceptions"><Bell size={20}/>{alerts > 0 && <span/>}</Link>
           <Link href="/settings" className="account-avatar top-avatar" aria-label="Account settings">{initials}</Link>
         </div>
       </header>

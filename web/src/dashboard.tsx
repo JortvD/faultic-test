@@ -29,7 +29,7 @@ function Metrics({ shipments }: { shipments: Shipment[] }) {
     { label: 'Total shipments', value: shipments.length, icon: Package, hint: 'All workspace shipments', tone: 'sage', href: '/shipments' },
     { label: 'In transit', value: shipments.filter(s => s.status === 'in_transit').length, icon: Truck, hint: 'On the way to recipients', tone: 'blue', href: '/shipments?status=in_transit' },
     { label: 'Delivered on time', value: rate === null ? '—' : rate + '%', icon: CircleCheck, hint: delivered.length ? delivered.length + ' completed deliveries' : 'No completed deliveries', tone: 'sage', href: '/analytics' },
-    { label: 'Exceptions', value: shipments.filter(s => s.status === 'exception').length, icon: AlertTriangle, hint: 'Shipments needing attention', tone: 'amber', href: '/shipments?status=exception' },
+    { label: 'Exceptions', value: shipments.filter(s => s.status === 'exception').length, icon: AlertTriangle, hint: 'Shipments needing attention', tone: 'amber', href: '/exceptions' },
   ];
   return <div className="metrics">{counts.map(({ icon: Icon, ...metric }) => <Link href={metric.href} key={metric.label} className="metric panel">
     <div className="metric-top"><span>{metric.label}</span><span className={'metric-icon ' + metric.tone}><Icon size={18}/></span></div>
@@ -71,7 +71,7 @@ function Volume({ shipments }: { shipments: Shipment[] }) {
 }
 
 function ActivityPanel({ shipments }: { shipments: Shipment[] }) {
-  const events = shipments.flatMap(shipment => shipment.events.map(event => ({ ...event, tracking: shipment.tracking, reference: shipment.reference })))
+  const events = shipments.flatMap(shipment => shipment.events.slice(-4).map(event => ({ ...event, tracking: shipment.tracking, reference: shipment.reference })))
     .sort((first, second) => second.at.localeCompare(first.at)).slice(0, 4);
   return <section className="panel activity-panel">
     <div className="panel-heading"><div><h2>Recent activity</h2><p>Latest updates across your network.</p></div><Activity size={19}/></div>
@@ -89,7 +89,7 @@ export function Dashboard({ account, shipments, carriers }: { account: Account; 
       <div className="hero-content"><div className="hero-kicker"><span/> OPERATIONS OVERVIEW</div><h1>Hello, {account.name.split(' ')[0]}.</h1>
         <p>{activeCount(shipments) ? `${activeCount(shipments)} active shipments across your network.` : 'Plan, dispatch, and track freight from one workspace.'}</p>
         <div className="hero-actions"><Link className="button hero-button" href="/shipments/new"><Plus size={17}/> New shipment</Link>
-          <Link href="/shipments?status=exception" className="button hero-secondary"><AlertTriangle size={16}/> {exceptions} {exceptions === 1 ? 'exception' : 'exceptions'}</Link></div>
+          <Link href="/exceptions" className="button hero-secondary"><AlertTriangle size={16}/> {exceptions} {exceptions === 1 ? 'exception' : 'exceptions'}</Link></div>
       </div><HeroGraphic/>
     </section>
     <Metrics shipments={shipments}/>

@@ -1,6 +1,6 @@
 import { useState, type FormEvent } from 'react';
 import { ArrowLeft, Clipboard, Download, MapPin, Package, Plane, Plus, Printer, Truck } from 'lucide-react';
-import { api, blankLane, carrierName, dateTime, day, downloadShipments, message, money, overdue, statuses, today, transitions, type Carrier, type Lane, type Quote, type Shipment, type ShipmentInput, type Status } from './data';
+import { api, blankLane, carrierName, dateTime, day, downloadShipments, exceptionReasons, message, money, overdue, statuses, today, transitions, type Carrier, type Contact, type ExceptionReason, type Lane, type Quote, type Shipment, type ShipmentInput, type Status } from './data';
 import { ShipmentFilters, ShipmentTable } from './dashboard';
 import { Badge, Empty, ErrorNotice, Link, navigate, StatusIcon } from './ui';
 
@@ -53,19 +53,25 @@ function LaneFields<T extends Lane>({ lane, setLane }: { lane: T; setLane: (lane
   </>;
 }
 
-function initialInput(existing: Shipment | undefined, query: URLSearchParams): ShipmentInput {
-  if (existing) return { ...existing };
+function initialInput(existing: Shipment | undefined, source: Shipment | undefined, contact: Contact | undefined, query: URLSearchParams): ShipmentInput {
+  const original = existing ?? source;
+  if (original) {
+    const { reference, recipient, deliveryAddress, carrier, shipDate, origin, destination, international, weightKg, lengthCm, widthCm, heightCm } = original;
+    return { reference: existing ? reference : '', recipient, deliveryAddress, carrier, shipDate: existing ? shipDate : today(),
+      origin, destination, international, weightKg, lengthCm, widthCm, heightCm };
+  }
   const dimensions = (key: 'weightKg' | 'lengthCm' | 'widthCm' | 'heightCm') => Number(query.get(key)) || blankLane[key];
-  return { origin: query.get('origin') ?? '', destination: query.get('destination') ?? '',
+  return { origin: query.get('origin') ?? '', destination: contact?.city ?? query.get('destination') ?? '',
     international: query.get('international') === 'true', weightKg: dimensions('weightKg'),
     lengthCm: dimensions('lengthCm'), widthCm: dimensions('widthCm'), heightCm: dimensions('heightCm'),
-    carrier: query.get('carrier') ?? '', reference: '', recipient: '', deliveryAddress: '', shipDate: today() };
+    carrier: query.get('carrier') ?? '', reference: '', recipient: contact?.name ?? '', deliveryAddress: contact?.address ?? '', shipDate: today() };
 }
 
-export function ShipmentForm({ existing, carriers, query, onSave }: {
-  existing?: Shipment; carriers: Carrier[]; query: URLSearchParams; onSave: (shipment: Shipment) => void;
+export function ShipmentForm({ existing, source, carriers, contacts, query, onSave }: {
+  existing?: Shipment; source?: Shipment; carriers: Carrier[]; contacts: Contact[]; query: URLSearchParams; onSave: (shipment: Shipment) => void;
 }) {
-  const [input, setInput] = useState(() => initialInput(existing, query));
+  const [contactId, setContactId] = useState(() => contacts.find(contact => contact.id === Number(query.get('contact')))?.id ?? 0);
+  const [input, setInput] = useState(() => initialInput(existing, source, contacts.find(contact => contact.id === contactId), query));
   const [estimate, setEstimate] = useState<Quote[]>();
   const [error, setError] = useState('');
   const [busy, setBusy] = useState('');
@@ -93,11 +99,20 @@ export function ShipmentForm({ existing, carriers, query, onSave }: {
     <Link href={existing ? '/shipments/' + existing.tracking : '/shipments'} className="back-link"><ArrowLeft size={16}/> {existing ? existing.reference : 'Shipments'}</Link>
     <header className="page-heading"><div><h1>{existing ? 'Edit shipment' : 'New shipment'}</h1><p>Enter the delivery details and choose a carrier service.</p></div></header>
     <form onSubmit={submit} className="form-layout" id="shipment-form">
-      <div className="form-stack">
+      <fieldset disabled={!!busy} className="form-stack">
         <section className="panel form-card"><div className="form-title"><MapPin size={20}/><h2>Route and parcel</h2></div>
           <LaneFields lane={input} setLane={value => { setInput(value); setEstimate(undefined); }}/>
         </section>
         <section className="panel form-card"><div className="form-title"><Package size={20}/><h2>Shipment details</h2></div>
+          {!!contacts.length && <label>Autofill from address book<select value={contactId} onChange={event => {
+            const id = Number(event.target.value);
+            const contact = contacts.find(item => item.id === id);
+            setContactId(id);
+            if (contact) {
+              setInput(current => ({ ...current, recipient: contact.name, destination: contact.city, deliveryAddress: contact.address }));
+              setEstimate(undefined);
+            }
+          }}><option value={0}>Enter delivery details manually</option>{[...contacts].sort((a, b) => a.name.localeCompare(b.name)).map(contact => <option key={contact.id} value={contact.id}>{contact.name} · {contact.city}</option>)}</select></label>}
           <div className="form-grid">
             <label>Shipment reference<input required autoComplete="off" maxLength={64} placeholder="SO-4840" value={input.reference} onChange={event => field('reference', event.target.value)}/></label>
             <label>Ship date<input required type="date" min={existing && existing.shipDate < today() ? existing.shipDate : today()} value={input.shipDate} onChange={event => field('shipDate', event.target.value)}/></label>
@@ -105,12 +120,12 @@ export function ShipmentForm({ existing, carriers, query, onSave }: {
             <label>Delivery address<input required maxLength={240} placeholder="Street address and postal code" value={input.deliveryAddress} onChange={event => field('deliveryAddress', event.target.value)}/></label>
           </div>
         </section>
-      </div>
+      </fieldset>
       <section className="panel form-card side-form">
         <div className="form-title"><Truck size={20}/><h2>Carrier service</h2></div>
-        <label>Service<select required value={input.carrier} onChange={event => field('carrier', event.target.value)}><option value="">Select a carrier</option>{carriers.map(carrier => <option value={carrier.id} key={carrier.id}>{carrier.name} · {carrier.service}</option>)}</select></label>
+        <label>Service<select required disabled={!!busy} value={input.carrier} onChange={event => field('carrier', event.target.value)}><option value="">Select a carrier</option>{carriers.map(carrier => <option value={carrier.id} key={carrier.id}>{carrier.name} · {carrier.service}</option>)}</select></label>
         <button className="button secondary" type="submit" value="estimate" formNoValidate disabled={!!busy}>{busy === 'estimate' ? 'Checking rates…' : 'Check estimated rates'}</button>
-        {estimate && (!estimate.length ? <p className="muted">No listed service supports this parcel.</p> : <div className="rate-mini">{estimate.map(quote => <button className={quote.carrier.id === input.carrier ? 'chosen' : ''} key={quote.carrier.id} type="button" onClick={() => field('carrier', quote.carrier.id)}><span>{quote.carrier.name}<small>{quote.days} calendar days</small></span><strong>{money(quote.costCents)}</strong></button>)}</div>)}
+        {estimate && (!estimate.length ? <p className="muted">No listed service supports this parcel.</p> : <div className="rate-mini">{estimate.map(quote => <button className={quote.carrier.id === input.carrier ? 'chosen' : ''} key={quote.carrier.id} type="button" disabled={!!busy} onClick={() => field('carrier', quote.carrier.id)}><span>{quote.carrier.name}<small>{quote.days} calendar days</small></span><strong>{money(quote.costCents)}</strong></button>)}</div>)}
         {estimated && <p className="muted">Billed weight estimate: {estimated.chargeableKg} kg.</p>}
         {existing && existing.shipDate < today() && <p className="muted">You can keep the previous ship date or choose a future date.</p>}
         <ErrorNotice>{error}</ErrorNotice>
@@ -167,6 +182,7 @@ export function ShipmentDetail({ shipment, carriers, onSave, onRefresh }: { ship
   const [status, setStatus] = useState<Status>(transitions[shipment.status][0] ?? shipment.status);
   const [location, setLocation] = useState('');
   const [note, setNote] = useState('');
+  const [reason, setReason] = useState<ExceptionReason>('other');
   const [error, setError] = useState('');
   const [copy, setCopy] = useState('');
   const [busy, setBusy] = useState(false);
@@ -176,7 +192,7 @@ export function ShipmentDetail({ shipment, carriers, onSave, onRefresh }: { ship
   async function update(event: FormEvent<HTMLFormElement>) {
     event.preventDefault(); setBusy(true); setError('');
     try {
-      onSave(await api<Shipment>(path + '/events', { method: 'POST', body: JSON.stringify({ version: shipment.version, status, location, note }) }));
+      onSave(await api<Shipment>(path + '/events', { method: 'POST', body: JSON.stringify({ version: shipment.version, status, location, note, reason: status === 'exception' ? reason : undefined }) }));
     } catch (failure) { setError(message(failure)); }
     finally { setBusy(false); }
   }
@@ -189,6 +205,7 @@ export function ShipmentDetail({ shipment, carriers, onSave, onRefresh }: { ship
     <header className="page-heading"><div><div className="title-line"><h1>{shipment.reference}</h1><Badge status={shipment.status}/></div><p>{shipment.tracking}</p></div>
       <div className="page-actions">
         {['draft', 'ready'].includes(shipment.status) && <Link className="button secondary" href={path + '/edit'}>Edit shipment</Link>}
+        <Link className="button secondary" href={'/shipments/new?copy=' + shipment.tracking}>Duplicate shipment</Link>
         {shipment.status !== 'cancelled' && <Link className="button secondary" href={path + '/label'}><Printer size={17}/> Shipping label</Link>}
       </div>
     </header>
@@ -202,6 +219,7 @@ export function ShipmentDetail({ shipment, carriers, onSave, onRefresh }: { ship
             <div><dt>Ship date</dt><dd>{day(shipment.shipDate)}</dd></div><div><dt>Estimated delivery</dt><dd>{day(shipment.eta)}{overdue(shipment) && <span className="overdue"> · Overdue</span>}</dd></div>
             <div><dt>Parcel dimensions</dt><dd>{shipment.lengthCm} × {shipment.widthCm} × {shipment.heightCm} cm</dd></div><div><dt>Actual / billable weight</dt><dd>{shipment.weightKg} kg / {shipment.chargeableKg} kg</dd></div>
           </dl>
+          {shipment.manifest && <Link className="back-link" href={'/dispatch/' + shipment.manifest}>View dispatch manifest</Link>}
           {shipment.status !== 'draft' && <div className="page-actions"><Link className="button secondary" href={trackingPath}>Public tracking</Link><button type="button" className="button secondary" onClick={copyTracking}><Clipboard size={16}/> Copy tracking link</button><span className="muted" role="status">{copy}</span></div>}
         </section>
         {!!allowed.length && <form className="panel form-card" onSubmit={update}>
@@ -210,6 +228,7 @@ export function ShipmentDetail({ shipment, carriers, onSave, onRefresh }: { ship
             <label>Shipment status<select value={status} onChange={event => setStatus(event.target.value as Status)}>{allowed.map(value => <option value={value} key={value}>{statuses[value]}</option>)}</select></label>
             <label>Event location<input required maxLength={100} placeholder="Austin, TX" value={location} onChange={event => setLocation(event.target.value)}/></label>
           </div>
+          {status === 'exception' && <label>Exception reason<select value={reason} onChange={event => setReason(event.target.value as ExceptionReason)}>{Object.entries(exceptionReasons).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></label>}
           <label>Event note<textarea required maxLength={400} placeholder="Add a note for your operations team" value={note} onChange={event => setNote(event.target.value)}/></label>
           <ErrorNotice>{error}</ErrorNotice>
           <div className="page-actions"><button className="button primary" disabled={busy}>{busy ? 'Saving…' : 'Record event'}</button>
@@ -219,7 +238,7 @@ export function ShipmentDetail({ shipment, carriers, onSave, onRefresh }: { ship
       </div>
       <section className="panel form-card"><div className="form-title"><Package size={20}/><h2>Shipment timeline</h2></div>
         <ol className="timeline">{[...shipment.events].reverse().map((event, index) => <li key={event.at + index}>
-          <StatusIcon status={event.status}/><div><strong>{statuses[event.status]}</strong><time dateTime={event.at}>{dateTime(event.at)} · {event.location}</time><p>{event.note}</p></div>
+          <StatusIcon status={event.status}/><div><strong>{statuses[event.status]}</strong><time dateTime={event.at}>{dateTime(event.at)} · {event.location}</time><p>{event.reason && <strong>{exceptionReasons[event.reason]}</strong>}{event.note}</p></div>
         </li>)}</ol>
       </section>
     </div>

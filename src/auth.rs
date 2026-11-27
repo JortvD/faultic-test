@@ -300,11 +300,7 @@ fn create_account(
 ) -> Result<Account> {
     let demo = password.is_none();
     let mut db = app.store.lock()?;
-    let tx = db.transaction()?;
-    tx.execute(
-        "DELETE FROM accounts WHERE demo = 1 AND created_at <= unixepoch() - ?1",
-        [DEMO_LIFETIME],
-    )?;
+    let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     let inserted = tx.execute(
         "INSERT INTO accounts(email, name, company, password, demo) VALUES (?1, ?2, ?3, ?4, ?5)
          ON CONFLICT(email) DO NOTHING",
@@ -314,6 +310,10 @@ fn create_account(
         return Err(Error::conflict("An account already uses this email."));
     }
     let id = tx.last_insert_rowid();
+    tx.execute(
+        "DELETE FROM accounts WHERE demo = 1 AND created_at <= unixepoch() - ?1",
+        [DEMO_LIFETIME],
+    )?;
     if sample {
         shipments::seed(&tx, id)?;
     }

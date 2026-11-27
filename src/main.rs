@@ -1,4 +1,5 @@
 mod auth;
+mod contacts;
 mod shipments;
 mod store;
 
@@ -77,11 +78,14 @@ async fn check_origin(
 async fn ready(
     axum::extract::State(app): axum::extract::State<App>,
 ) -> store::Result<Json<serde_json::Value>> {
-    app.store.lock()?.query_row(
-        "SELECT count(*) FROM sqlite_schema WHERE name = 'shipments'",
-        [],
-        |row| row.get::<_, u32>(0),
+    let tables = app.store.lock()?.query_row(
+        "SELECT count(*) FROM sqlite_schema
+         WHERE type = 'table' AND name IN ('accounts', 'sessions', 'shipments', 'contacts', 'manifests')",
+        [], |row| row.get::<_, u32>(0),
     )?;
+    if tables != 5 {
+        return Err(store::Error::internal("incomplete database schema"));
+    }
     Ok(Json(
         json!({"status": "ready", "version": env!("CARGO_PKG_VERSION")}),
     ))
@@ -128,6 +132,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             post(shipments::update_status),
         )
         .route("/carriers", get(shipments::carriers))
+        .route("/contacts", get(contacts::list).post(contacts::create))
+        .route(
+            "/contacts/{id}",
+            axum::routing::put(contacts::edit).delete(contacts::remove),
+        )
+        .route(
+            "/manifests",
+            get(shipments::list_manifests).post(shipments::dispatch_manifest),
+        )
+        .route("/manifests/{id}", get(shipments::manifest_detail))
         .route("/quotes", post(shipments::quotes))
         .route("/tracking/{tracking}", get(shipments::public_tracking))
         .fallback(|| async { store::Error::missing() })

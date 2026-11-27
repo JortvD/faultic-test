@@ -233,7 +233,7 @@ fieldset { min-width: 0; border: 0; padding: 0; margin: 0; }
 .timeline li > div, .timeline .status-icon { position: relative; }
 .timeline strong, .timeline time { display: block; }
 .timeline time { font-size: .76rem; color: var(--muted); margin-top: 2px; }
-.timeline p { font-size: .875rem; margin-top: 5px; line-height: 1.45; }
+.timeline p { font-size: .875rem; margin-top: 5px; line-height: 1.45; white-space: pre-wrap; }
 .success, .error { display: flex; align-items: flex-start; gap: 8px; font-size: .875rem; line-height: 1.45; }
 .success { color: #306044; }
 .error { background: #faece8; border: 1px solid #efd4ca; border-radius: 8px; padding: 9px 11px; color: #8d362d; }
@@ -343,3 +343,23 @@ fieldset { min-width: 0; border: 0; padding: 0; margin: 0; }
   .workspace-content { display: block; padding: 0; margin: 0; }
   .shipping-label { break-inside: avoid; }
 }
+
+.dispatch-form > label { max-width: 520px; }
+.dispatch-selection { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; }
+.dispatch-form th:first-child, .dispatch-form td:first-child { width: 74px; }
+.list-message { padding: 12px 17px; color: var(--muted); }
+.confirmation { display: grid; gap: 10px; padding: 12px; border: 1px solid #eed9d1; border-radius: 8px; background: #fcf0ec; color: #803e35; }
+.confirmation p { font-size: .875rem; line-height: 1.45; }
+.danger { background: #923c33; color: #fff; }
+.danger:hover { background: #ad453b; }
+.manifest-record header { display: grid; gap: 6px; overflow-wrap: anywhere; }
+.manifest-notes p { margin-top: 5px; overflow-wrap: anywhere; }
+@media print {
+  .manifest-record { box-shadow: none; border: 0; padding: 0; }
+  .manifest-record .table-scroll { overflow: visible; }
+  .manifest-record thead { display: table-header-group; }
+  .manifest-record tr { break-inside: avoid; }
+}
+.exception-summary { display: flex; flex-wrap: wrap; gap: 12px; }
+.exception-summary > span { display: flex; align-items: center; gap: 8px; padding: 12px; color: #70441f; }
+.issue-note { max-width: 330px; overflow-wrap: anywhere; }

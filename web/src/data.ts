@@ -37,11 +37,23 @@ export interface ShipmentInput extends Lane {
   shipDate: string;
 }
 
+export const exceptionReasons = {
+  address_issue: 'Address issue',
+  delivery_attempt: 'Delivery attempt failed',
+  carrier_delay: 'Carrier delay',
+  customs_hold: 'Customs hold',
+  damage: 'Reported damage',
+  other: 'Other',
+} as const;
+
+export type ExceptionReason = keyof typeof exceptionReasons;
+
 export interface ShipmentEvent {
   status: Status;
   at: string;
   location: string;
   note: string;
+  reason?: ExceptionReason;
 }
 
 export interface Shipment extends ShipmentInput {
@@ -52,6 +64,7 @@ export interface Shipment extends ShipmentInput {
   createdAt: string;
   costCents: number;
   chargeableKg: number;
+  manifest?: string | null;
   events: ShipmentEvent[];
 }
 
@@ -79,6 +92,35 @@ export interface Quote {
   chargeableKg: number;
 }
 
+export interface ContactInput {
+  name: string;
+  city: string;
+  address: string;
+  email: string;
+  phone: string;
+}
+
+export interface Contact extends ContactInput {
+  id: number;
+  version: number;
+}
+
+export interface Manifest {
+  id: string;
+  reference: string;
+  notes: string;
+  carrier: string;
+  origin: string;
+  dispatchedAt: string;
+  dispatchedBy: string;
+  shipments: Pick<Shipment, 'tracking' | 'reference' | 'destination' | 'weightKg'>[];
+}
+
+export interface DispatchResult {
+  manifest: Manifest;
+  shipments: Shipment[];
+}
+
 export class ApiError extends Error {
   constructor(public status: number, message: string) { super(message); }
 }
@@ -89,6 +131,7 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
     headers: { Accept: 'application/json', ...(init.body ? { 'Content-Type': 'application/json' } : {}), ...init.headers },
   });
   if (!response.ok) {
+    if (response.status === 401 && !path.startsWith('/auth/')) window.dispatchEvent(new Event('fieldline-session-expired'));
     const error = await response.json().catch(() => null);
     throw new ApiError(response.status, error?.message ?? (response.status === 422 ? 'Check the form values and try again.' : 'The request could not be completed.'));
   }

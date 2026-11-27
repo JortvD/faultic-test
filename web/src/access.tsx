@@ -34,7 +34,7 @@ export function Access({ register, next, onAccess }: { register: boolean; next: 
           {register && <div className="form-grid"><label>Full name<input value={name} onChange={event => setName(event.target.value)} required autoComplete="name" maxLength={80}/></label><label>Workspace name<input value={company} onChange={event => setCompany(event.target.value)} required autoComplete="organization" maxLength={100}/></label></div>}
           <label>Email address<input required type="email" value={email} onChange={event => setEmail(event.target.value)} autoComplete="email" maxLength={254} placeholder="you@company.com"/></label>
           <label>Password<input required type="password" value={password} onChange={event => setPassword(event.target.value)} autoComplete={register ? 'new-password' : 'current-password'} minLength={register ? 12 : undefined} maxLength={128} placeholder={register ? 'At least 12 characters' : 'Enter your password'}/></label>
-          {register && <label className="check-inline"><input type="checkbox" checked={sample} onChange={event => setSample(event.target.checked)}/> Add sample shipments to explore the workspace</label>}
+          {register && <label className="check-inline"><input type="checkbox" checked={sample} onChange={event => setSample(event.target.checked)}/> Add sample data to explore the workspace</label>}
           <ErrorNotice>{error}</ErrorNotice>
           <button className="button primary" disabled={!!busy}>{busy && busy !== 'demo' ? 'Working…' : register ? 'Create workspace' : 'Sign in'}</button>
         </form>

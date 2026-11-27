@@ -86,7 +86,8 @@ impl Store {
     pub fn session(&self, token_hash: &str) -> Result<Option<Account>> {
         Ok(self.lock()?.query_row(
             "SELECT a.id, a.name, a.email, a.company, a.demo FROM accounts a
-             JOIN sessions s ON s.account_id = a.id WHERE s.token_hash = ?1 AND s.expires > unixepoch()",
+             JOIN sessions s ON s.account_id = a.id WHERE s.token_hash = ?1 AND s.expires > unixepoch()
+             AND (a.demo = 0 OR a.created_at + 86400 > unixepoch())",
             [token_hash], |row| Ok(Account {
                 id: row.get(0)?, name: row.get(1)?, email: row.get(2)?,
                 company: row.get(3)?, demo: row.get(4)?,
