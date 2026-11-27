@@ -2,6 +2,7 @@ import { useEffect, useState, type FormEvent } from 'react';
 import { Box, CircleCheck, Globe, MapPin, PackageSearch, ShieldCheck } from 'lucide-react';
 import { api, ApiError, dateTime, day, message, statuses, type Account, type Tracking } from './data';
 import { Badge, Brand, ErrorNotice, HeroGraphic, Link, navigate, StatusIcon } from './ui';
+import { useWorkspaceApi } from './workspace-session';
 
 export function Access({ register, next, onAccess }: { register: boolean; next: string; onAccess: (account: Account) => void }) {
   const [name, setName] = useState('');
@@ -9,14 +10,24 @@ export function Access({ register, next, onAccess }: { register: boolean; next: 
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [sample, setSample] = useState(true);
+  const [codeRequested, setCodeRequested] = useState(false);
+  const [code, setCode] = useState('');
   const [busy, setBusy] = useState('');
   const [error, setError] = useState('');
-  async function authenticate(action: 'login' | 'register' | 'demo') {
+  async function authenticate(action: 'login' | 'register' | 'register/verify' | 'demo') {
     setBusy(action); setError('');
     try {
+      if (action === 'register') {
+        await api('/auth/register', { method: 'POST', body: JSON.stringify({ email }) });
+        setCodeRequested(true);
+        setCode('');
+        return;
+      }
       const account = await api<Account>('/auth/' + action, {
         method: 'POST',
-        body: action === 'demo' ? undefined : JSON.stringify(register ? { name, company, email, password, sample } : { email, password }),
+        body: action === 'demo' ? undefined : JSON.stringify(
+          action === 'register/verify' ? { name, company, email, password, sample, code } : { email, password },
+        ),
       });
       onAccess(account);
       navigate(action === 'demo' ? '/' : next, true);
@@ -30,13 +41,21 @@ export function Access({ register, next, onAccess }: { register: boolean; next: 
         <div className="access-icon"><ShieldCheck size={23}/></div>
         <h1>{register ? 'Create your workspace' : 'Sign in to Fieldline'}</h1>
         <p>{register ? 'Set up your shipping operations workspace.' : 'Manage shipments, rates, and delivery activity.'}</p>
-        <form onSubmit={event => { event.preventDefault(); void authenticate(register ? 'register' : 'login'); }}>
+        <form onSubmit={event => { event.preventDefault(); void authenticate(register ? codeRequested ? 'register/verify' : 'register' : 'login'); }}>
           {register && <div className="form-grid"><label>Full name<input value={name} onChange={event => setName(event.target.value)} required autoComplete="name" maxLength={80}/></label><label>Workspace name<input value={company} onChange={event => setCompany(event.target.value)} required autoComplete="organization" maxLength={100}/></label></div>}
-          <label>Email address<input required type="email" value={email} onChange={event => setEmail(event.target.value)} autoComplete="email" maxLength={254} placeholder="you@company.com"/></label>
+          <label>Email address<input required type="email" value={email} onChange={event => setEmail(event.target.value)} autoComplete="email" readOnly={codeRequested} maxLength={254} placeholder="you@company.com"/></label>
           <label>Password<input required type="password" value={password} onChange={event => setPassword(event.target.value)} autoComplete={register ? 'new-password' : 'current-password'} minLength={register ? 12 : undefined} maxLength={128} placeholder={register ? 'At least 12 characters' : 'Enter your password'}/></label>
           {register && <label className="check-inline"><input type="checkbox" checked={sample} onChange={event => setSample(event.target.checked)}/> Add sample data to explore the workspace</label>}
+          {codeRequested && <>
+            <p className="muted" role="status">Check your inbox for a verification code. It expires in ten minutes.</p>
+            <label>Verification code<input required value={code} maxLength={16} autoComplete="one-time-code" pattern="[A-Fa-f0-9]{16}" onChange={event => setCode(event.target.value.trim())}/></label>
+          </>}
           <ErrorNotice>{error}</ErrorNotice>
-          <button className="button primary" disabled={!!busy}>{busy && busy !== 'demo' ? 'Working…' : register ? 'Create workspace' : 'Sign in'}</button>
+          <button className="button primary" disabled={!!busy}>{busy && busy !== 'demo' ? 'Working…' : register ? codeRequested ? 'Verify and create workspace' : 'Send verification code' : 'Sign in'}</button>
+          {codeRequested && <div className="page-actions">
+            <button className="button secondary" type="button" disabled={!!busy} onClick={() => void authenticate('register')}>Resend code</button>
+            <button className="button secondary" type="button" disabled={!!busy} onClick={() => { setCodeRequested(false); setCode(''); setError(''); }}>Change email</button>
+          </div>}
         </form>
         {!register && <button className="button secondary demo-button" disabled={!!busy} onClick={() => void authenticate('demo')}>{busy === 'demo' ? 'Preparing workspace…' : 'Explore demo workspace'}</button>}
         <p className="access-switch">{register ? 'Already have a workspace?' : 'New to Fieldline?'} <Link href={register ? '/login' : '/register'}>{register ? 'Sign in' : 'Create an account'}</Link></p>
@@ -88,6 +107,7 @@ export function PublicTracking({ search, account }: { search: string; account: A
 }
 
 export function Settings({ account, onSave, onPasswordChange }: { account: Account; onSave: (account: Account) => void; onPasswordChange: () => void }) {
+  const api = useWorkspaceApi();
   const [name, setName] = useState(account.name);
   const [company, setCompany] = useState(account.company);
   const [error, setError] = useState('');
@@ -113,6 +133,7 @@ export function Settings({ account, onSave, onPasswordChange }: { account: Accou
 }
 
 function PasswordForm({ onChange }: { onChange: () => void }) {
+  const api = useWorkspaceApi();
   const [currentPassword, setCurrent] = useState('');
   const [newPassword, setNew] = useState('');
   const [confirm, setConfirm] = useState('');

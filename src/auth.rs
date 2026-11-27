@@ -1,23 +1,19 @@
-use std::{
-    collections::HashMap,
-    net::{IpAddr, SocketAddr},
-    num::NonZeroU32,
-    time::{Duration, Instant},
-};
+use std::{net::SocketAddr, num::NonZeroU32};
 
 use axum::{
     Json,
     extract::{ConnectInfo, FromRequestParts, State},
-    http::{HeaderMap, HeaderValue, header, request::Parts},
+    http::{HeaderMap, HeaderValue, Method, StatusCode, header, request::Parts},
     response::{IntoResponse, Response},
 };
 use ring::{digest, pbkdf2};
-use rusqlite::{OptionalExtension, params};
+use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 use serde::Deserialize;
 
 use crate::{
     App, shipments,
     store::{Account, Error, Result, random, required},
+    traffic::Action,
 };
 
 const COOKIE: &str = "fieldline_session";
@@ -25,24 +21,34 @@ const LIFETIME: u64 = 7 * 24 * 60 * 60;
 const DEMO_LIFETIME: u64 = 24 * 60 * 60;
 const ITERATIONS: NonZeroU32 = NonZeroU32::new(600_000).unwrap();
 
-#[derive(Default)]
-pub struct Limits(HashMap<IpAddr, (Instant, u8)>);
+const WORKSPACE_HEADER: &str = "x-fieldline-workspace";
+const CODE_LIFETIME: u64 = 10 * 60;
 
-impl Limits {
-    fn take(&mut self, ip: IpAddr) -> Result<()> {
-        let now = Instant::now();
-        self.0
-            .retain(|_, (start, _)| now.duration_since(*start) < Duration::from_secs(300));
-        if self.0.len() >= 4096 && !self.0.contains_key(&ip) {
-            return Err(Error::limited());
-        }
-        let (_, attempts) = self.0.entry(ip).or_insert((now, 0));
-        if *attempts >= 20 {
-            return Err(Error::limited());
-        }
-        *attempts += 1;
-        Ok(())
+fn limit(
+    app: &App,
+    action: Action,
+    peer: SocketAddr,
+    headers: &HeaderMap,
+    account: Option<&str>,
+) -> Result<()> {
+    let client = app.trusted_proxies.client_ip(peer.ip(), headers)?;
+    app.limits
+        .lock()
+        .map_err(Error::internal)?
+        .take(action, client, account)
+}
+
+fn check_workspace(headers: &HeaderMap, account: i64, required: bool) -> Result<()> {
+    let supplied = headers.get(WORKSPACE_HEADER);
+    if (required || supplied.is_some())
+        && supplied
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.parse::<i64>().ok())
+            != Some(account)
+    {
+        return Err(Error::workspace_changed());
     }
+    Ok(())
 }
 
 fn hash_password(password: &str) -> Result<String> {
@@ -107,17 +113,8 @@ fn start_session(
     account: Account,
     expected_password: Option<&str>,
 ) -> Result<Response> {
-    let mut bytes = [0; 32];
-    random(&mut bytes)?;
-    let value = hex::encode(bytes);
-    let age = if account.demo {
-        DEMO_LIFETIME
-    } else {
-        LIFETIME
-    };
-    let response_cookie = cookie(&value, age, app.secure_cookies)?;
     let mut db = app.store.lock()?;
-    let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+    let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
     if let Some(expected) = expected_password {
         let stored: String = tx.query_row(
             "SELECT password FROM accounts WHERE id = ?1",
@@ -128,6 +125,26 @@ fn start_session(
             return Err(Error::unauthorized("The email or password is incorrect."));
         }
     }
+    let response = attach_session(&tx, app, headers, account)?;
+    tx.commit()?;
+    Ok(response)
+}
+
+fn attach_session(
+    tx: &Transaction<'_>,
+    app: &App,
+    headers: &HeaderMap,
+    account: Account,
+) -> Result<Response> {
+    let mut bytes = [0; 32];
+    random(&mut bytes)?;
+    let value = hex::encode(bytes);
+    let age = if account.demo {
+        DEMO_LIFETIME
+    } else {
+        LIFETIME
+    };
+    let response_cookie = cookie(&value, age, app.secure_cookies)?;
     if let Some(old_session) = token(headers) {
         tx.execute("DELETE FROM sessions WHERE token_hash = ?1", [old_session])?;
     }
@@ -136,7 +153,6 @@ fn start_session(
         "INSERT INTO sessions VALUES (?1, ?2, unixepoch() + ?3)",
         params![token_hash(&value), account.id, age],
     )?;
-    tx.commit()?;
     Ok(([(header::SET_COOKIE, response_cookie)], Json(account)).into_response())
 }
 
@@ -148,6 +164,8 @@ impl FromRequestParts<App> for SignedIn {
         if let Some(hash) = token(&parts.headers)
             && let Some(account) = app.store.session(&hash)?
         {
+            let required = !matches!(parts.method, Method::GET | Method::HEAD);
+            check_workspace(&parts.headers, account.id, required)?;
             return Ok(Self(account));
         }
         Err(Error::unauthorized("Sign in to continue."))
@@ -162,6 +180,7 @@ pub struct Credentials {
 
 #[derive(Deserialize)]
 pub struct Registration {
+    code: String,
     name: String,
     company: String,
     sample: bool,
@@ -197,11 +216,8 @@ pub async fn login(
     headers: HeaderMap,
     Json(input): Json<Credentials>,
 ) -> Result<Response> {
-    app.limits
-        .lock()
-        .map_err(Error::internal)?
-        .take(peer.ip())?;
     let email = email(&input.email)?;
+    limit(&app, Action::Login, peer, &headers, Some(&email))?;
     if input.password.len() > 512 {
         return Err(Error::invalid("Password is too long."));
     }
@@ -242,30 +258,125 @@ pub async fn login(
     start_session(&app, &headers, account, Some(&stored))
 }
 
+#[derive(Deserialize)]
+pub struct RegistrationRequest {
+    email: String,
+}
+
+pub async fn request_registration(
+    State(app): State<App>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    Json(input): Json<RegistrationRequest>,
+) -> Result<StatusCode> {
+    let email = email(&input.email)?;
+    let recipient = email
+        .parse::<lettre::Address>()
+        .map_err(|_| Error::invalid("Enter a valid email address."))?;
+    let mailer = app.mailer.clone().ok_or_else(|| {
+        Error::unavailable(
+            "Email verification is unavailable. Please contact the workspace operator.",
+        )
+    })?;
+    if !mailer.allows_request(&headers, app.public_origin.as_deref()) {
+        return Err(Error::unavailable(
+            "Email verification is unavailable. Please contact the workspace operator.",
+        ));
+    }
+    limit(&app, Action::Code, peer, &headers, Some(&email))?;
+
+    let mut bytes = [0; 8];
+    random(&mut bytes)?;
+    let code = hex::encode_upper(bytes);
+    let digest = token_hash(&code);
+    {
+        let mut db = app.store.lock()?;
+        let tx = db.transaction()?;
+        tx.execute(
+            "DELETE FROM registration_codes WHERE expires <= unixepoch()",
+            [],
+        )?;
+        tx.execute(
+            "INSERT INTO registration_codes VALUES (?1, ?2, unixepoch() + ?3)",
+            params![digest, email, CODE_LIFETIME],
+        )?;
+        tx.commit()?;
+    }
+    let sent = tokio::task::spawn_blocking(move || mailer.verification_code(recipient, &code))
+        .await
+        .map_err(Error::internal)?;
+    if let Err(error) = sent {
+        app.store.lock()?.execute(
+            "DELETE FROM registration_codes WHERE token_hash = ?1",
+            [digest],
+        )?;
+        return Err(error);
+    }
+    Ok(StatusCode::ACCEPTED)
+}
+
 pub async fn register(
     State(app): State<App>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
     Json(input): Json<Registration>,
 ) -> Result<Response> {
-    app.limits
-        .lock()
-        .map_err(Error::internal)?
-        .take(peer.ip())?;
+    let email = email(&input.credentials.email)?;
+    limit(&app, Action::Verify, peer, &headers, Some(&email))?;
+    let code = input.code.trim();
+    if code.len() != 16 || !code.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(invalid_code());
+    }
+    let digest = token_hash(&code.to_ascii_uppercase());
+    let active: bool = app.store.lock()?.query_row(
+        "SELECT EXISTS(SELECT 1 FROM registration_codes WHERE email = ?1 AND token_hash = ?2 AND expires > unixepoch())",
+        params![email, digest], |row| row.get(0),
+    )?;
+    if !active {
+        return Err(invalid_code());
+    }
+
     let name = required(&input.name, 80, "Enter a name of up to 80 characters.")?;
     let company = required(
         &input.company,
         100,
         "Enter a workspace name of up to 100 characters.",
     )?;
-    let email = email(&input.credentials.email)?;
     let password = input.credentials.password;
     validate_password(&password)?;
     let hash = tokio::task::spawn_blocking(move || hash_password(&password))
         .await
         .map_err(Error::internal)??;
-    let account = create_account(&app, name, company, email, Some(hash), input.sample)?;
-    start_session(&app, &headers, account, None)
+
+    let mut db = app.store.lock()?;
+    let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    if tx.execute(
+        "DELETE FROM registration_codes WHERE email = ?1 AND token_hash = ?2 AND expires > unixepoch()",
+        params![email, digest],
+    )? == 0 {
+        return Err(invalid_code());
+    }
+    tx.execute("DELETE FROM registration_codes WHERE email = ?1", [&email])?;
+    let exists: bool = tx.query_row(
+        "SELECT EXISTS(SELECT 1 FROM accounts WHERE email = ?1)",
+        [&email],
+        |row| row.get(0),
+    )?;
+    if exists {
+        tx.commit()?;
+        return Err(Error::conflict(
+            "This email already has an account. Sign in to continue.",
+        ));
+    }
+
+    let account = create_account(&tx, name, company, email, Some(hash), input.sample)?;
+    let response = attach_session(&tx, &app, &headers, account)?;
+    tx.commit()?;
+    Ok(response)
+}
+
+fn invalid_code() -> Error {
+    Error::invalid("The verification code is incorrect or expired.")
 }
 
 pub async fn demo(
@@ -273,25 +384,26 @@ pub async fn demo(
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
 ) -> Result<Response> {
-    app.limits
-        .lock()
-        .map_err(Error::internal)?
-        .take(peer.ip())?;
+    limit(&app, Action::Demo, peer, &headers, None)?;
     let mut bytes = [0; 16];
     random(&mut bytes)?;
+    let mut db = app.store.lock()?;
+    let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
     let account = create_account(
-        &app,
+        &tx,
         "Alex Morgan".into(),
         "Fieldline Demo".into(),
         format!("{}@demo.invalid", hex::encode(bytes)),
         None,
         true,
     )?;
-    start_session(&app, &headers, account, None)
+    let response = attach_session(&tx, &app, &headers, account)?;
+    tx.commit()?;
+    Ok(response)
 }
 
 fn create_account(
-    app: &App,
+    db: &Connection,
     name: String,
     company: String,
     email: String,
@@ -299,25 +411,18 @@ fn create_account(
     sample: bool,
 ) -> Result<Account> {
     let demo = password.is_none();
-    let mut db = app.store.lock()?;
-    let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-    let inserted = tx.execute(
-        "INSERT INTO accounts(email, name, company, password, demo) VALUES (?1, ?2, ?3, ?4, ?5)
-         ON CONFLICT(email) DO NOTHING",
+    db.execute(
+        "INSERT INTO accounts(email, name, company, password, demo) VALUES (?1, ?2, ?3, ?4, ?5)",
         params![email, name, company, password, demo],
     )?;
-    if inserted == 0 {
-        return Err(Error::conflict("An account already uses this email."));
-    }
-    let id = tx.last_insert_rowid();
-    tx.execute(
+    let id = db.last_insert_rowid();
+    db.execute(
         "DELETE FROM accounts WHERE demo = 1 AND created_at <= unixepoch() - ?1",
         [DEMO_LIFETIME],
     )?;
     if sample {
-        shipments::seed(&tx, id)?;
+        shipments::seed(db, id)?;
     }
-    tx.commit()?;
     Ok(Account {
         id,
         name,
@@ -328,7 +433,10 @@ fn create_account(
 }
 
 pub async fn logout(State(app): State<App>, headers: HeaderMap) -> Result<Response> {
-    if let Some(hash) = token(&headers) {
+    if let Some(hash) = token(&headers)
+        && let Some(account) = app.store.session(&hash)?
+    {
+        check_workspace(&headers, account.id, true)?;
         app.store
             .lock()?
             .execute("DELETE FROM sessions WHERE token_hash = ?1", [hash])?;
@@ -382,15 +490,13 @@ pub async fn change_password(
     State(app): State<App>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     SignedIn(account): SignedIn,
+    headers: HeaderMap,
     Json(input): Json<PasswordChange>,
 ) -> Result<Response> {
     if account.demo {
         return Err(Error::invalid("Create an account to set a password."));
     }
-    app.limits
-        .lock()
-        .map_err(Error::internal)?
-        .take(peer.ip())?;
+    limit(&app, Action::Password, peer, &headers, Some(&account.email))?;
     if input.current_password.len() > 512 {
         return Err(Error::invalid("Current password is too long."));
     }

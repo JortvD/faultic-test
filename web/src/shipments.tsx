@@ -1,6 +1,7 @@
 import { useState, type FormEvent } from 'react';
 import { ArrowLeft, Clipboard, Download, MapPin, Package, Plane, Plus, Printer, Truck } from 'lucide-react';
-import { api, blankLane, carrierName, dateTime, day, downloadShipments, exceptionReasons, message, money, overdue, statuses, today, transitions, type Carrier, type Contact, type ExceptionReason, type Lane, type Quote, type Shipment, type ShipmentInput, type Status } from './data';
+import { blankLane, carrierName, dateTime, day, downloadShipments, exceptionReasons, message, money, overdue, statuses, today, transitions, type Carrier, type Contact, type ExceptionReason, type Lane, type Quote, type Shipment, type ShipmentInput, type Status } from './data';
+import { useWorkspaceApi } from './workspace-session';
 import { ShipmentFilters, ShipmentTable } from './dashboard';
 import { Badge, Empty, ErrorNotice, Link, navigate, StatusIcon } from './ui';
 
@@ -70,6 +71,7 @@ function initialInput(existing: Shipment | undefined, source: Shipment | undefin
 export function ShipmentForm({ existing, source, carriers, contacts, query, onSave }: {
   existing?: Shipment; source?: Shipment; carriers: Carrier[]; contacts: Contact[]; query: URLSearchParams; onSave: (shipment: Shipment) => void;
 }) {
+  const api = useWorkspaceApi();
   const [contactId, setContactId] = useState(() => contacts.find(contact => contact.id === Number(query.get('contact')))?.id ?? 0);
   const [input, setInput] = useState(() => initialInput(existing, source, contacts.find(contact => contact.id === contactId), query));
   const [estimate, setEstimate] = useState<Quote[]>();
@@ -136,6 +138,7 @@ export function ShipmentForm({ existing, source, carriers, contacts, query, onSa
 }
 
 export function RateCalculator() {
+  const api = useWorkspaceApi();
   const [lane, setLane] = useState(blankLane);
   const [results, setResults] = useState<Quote[]>();
   const [busy, setBusy] = useState(false);
@@ -179,6 +182,7 @@ export function CarrierDirectory({ carriers, shipments }: { carriers: Carrier[];
 }
 
 export function ShipmentDetail({ shipment, carriers, onSave, onRefresh }: { shipment: Shipment; carriers: Carrier[]; onSave: (shipment: Shipment) => void; onRefresh: () => Promise<void> }) {
+  const api = useWorkspaceApi();
   const [status, setStatus] = useState<Status>(transitions[shipment.status][0] ?? shipment.status);
   const [location, setLocation] = useState('');
   const [note, setNote] = useState('');

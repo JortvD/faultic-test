@@ -44,3 +44,11 @@ CREATE TABLE IF NOT EXISTS manifests (
     data TEXT NOT NULL CHECK(json_valid(data))
 ) STRICT;
 CREATE INDEX IF NOT EXISTS manifests_account ON manifests(account_id);
+
+CREATE TABLE IF NOT EXISTS registration_codes (
+    token_hash TEXT PRIMARY KEY,
+    email TEXT NOT NULL,
+    expires INTEGER NOT NULL
+) STRICT;
+CREATE INDEX IF NOT EXISTS registration_codes_email ON registration_codes(email);
+CREATE INDEX IF NOT EXISTS registration_codes_expiry ON registration_codes(expires);

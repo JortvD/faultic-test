@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { AlertTriangle, BarChart3, Bell, Calculator, ChevronDown, CircleHelp, ClipboardList, ContactRound, Globe2, LayoutDashboard, LogOut, Menu, Package, Search, Settings2, Truck, X } from 'lucide-react';
 import { Access, PublicTracking, Settings } from './access';
@@ -9,6 +9,7 @@ import { DispatchQueue, ManifestDetail } from './dispatch';
 import { api, ApiError, message, type Account, type Carrier, type Contact, type Shipment } from './data';
 import { CarrierDirectory, RateCalculator, ShipmentDetail, ShipmentForm, ShipmentIndex, ShippingLabel } from './shipments';
 import { Brand, Empty, ErrorNotice, Link, navigate } from './ui';
+import { announceSessionChange, bindWorkspace, sessionChangedKey, WorkspaceApi } from './workspace-session';
 import './styles.css';
 
 const navigation = [
@@ -27,19 +28,37 @@ function App() {
   const [account, setAccount] = useState<Account | null>();
   const [accessError, setAccessError] = useState('');
   const [sessionAttempt, setSessionAttempt] = useState(0);
+  const accountId = useRef<number | null>(null);
+  accountId.current = account?.id ?? null;
   useEffect(() => {
     function change() { setRoute(window.location.pathname + window.location.search); }
-    function expire() { setAccount(null); }
+    function recheck() {
+      accountId.current = null;
+      setAccount(undefined);
+      setAccessError('');
+      setSessionAttempt(value => value + 1);
+    }
+    function onStorage(event: StorageEvent) { if (event.key === sessionChangedKey) recheck(); }
+    function onConflict(event: Event) {
+      if ((event as CustomEvent<number>).detail === accountId.current) recheck();
+    }
+    function onPageShow(event: PageTransitionEvent) { if (event.persisted) recheck(); }
     window.addEventListener('popstate', change);
-    window.addEventListener('fieldline-session-expired', expire);
+    window.addEventListener('storage', onStorage);
+    window.addEventListener('pageshow', onPageShow);
+    window.addEventListener(sessionChangedKey, onConflict);
     return () => {
       window.removeEventListener('popstate', change);
-      window.removeEventListener('fieldline-session-expired', expire);
+      window.removeEventListener('storage', onStorage);
+      window.removeEventListener('pageshow', onPageShow);
+      window.removeEventListener(sessionChangedKey, onConflict);
     };
   }, []);
   useEffect(() => {
     const controller = new AbortController();
-    api<Account>('/me', { signal: controller.signal }).then(setAccount).catch(failure => {
+    api<Account>('/me', { signal: controller.signal }).then(current => {
+      if (!controller.signal.aborted) setAccount(current);
+    }).catch(failure => {
       if (controller.signal.aborted) return;
       if (failure instanceof ApiError && failure.status === 401) setAccount(null);
       else setAccessError(message(failure));
@@ -58,11 +77,12 @@ function App() {
   if (accessError) return <main className="standalone"><Brand/><ErrorNotice>{accessError}</ErrorNotice>
     <button className="button primary" onClick={() => { setAccessError(''); setSessionAttempt(attempt => attempt + 1); }}>Retry</button></main>;
   if (account === undefined) return <main className="standalone" role="status"><Brand/>Loading workspace…</main>;
-  if (!account) return <Access key={path === '/register' ? 'register' : 'login'} register={path === '/register'} next={path.startsWith('//') || ['/login', '/register'].includes(path) ? '/' : route} onAccess={setAccount}/>;
+  if (!account) return <Access key={path === '/register' ? 'register' : 'login'} register={path === '/register'} next={path.startsWith('//') || ['/login', '/register'].includes(path) ? '/' : route} onAccess={current => { setAccount(current); announceSessionChange(); }}/>;
   return <Workspace key={account.id} account={account} path={path} search={search} onAccount={setAccount}/>;
 }
 
 function Workspace({ account, path, search, onAccount }: { account: Account; path: string; search: string; onAccount: (account: Account | null) => void }) {
+  const api = useMemo(() => bindWorkspace(account.id), [account.id]);
   const [shipments, setShipments] = useState<Shipment[]>();
   const [carriers, setCarriers] = useState<Carrier[]>([]);
   const [contacts, setContacts] = useState<Contact[]>([]);
@@ -90,11 +110,10 @@ function Workspace({ account, path, search, onAccount }: { account: Account; pat
       .then(([records, services, addressBook]) => { setShipments(records); setCarriers(services); setContacts(addressBook); })
       .catch(failure => {
         if (controller.signal.aborted) return;
-        if (failure instanceof ApiError && failure.status === 401) { onAccount(null); navigate('/login', true); }
-        else setLoadError(message(failure));
+        setLoadError(message(failure));
       });
     return () => controller.abort();
-  }, [attempt, onAccount]);
+  }, [api, attempt]);
 
   function saveShipments(records: Shipment[]) {
     const updated = new Map(records.map(record => [record.tracking, record]));
@@ -110,9 +129,14 @@ function Workspace({ account, path, search, onAccount }: { account: Account; pat
   }
   async function reloadContacts() { setContacts(await api<Contact[]>('/contacts')); }
   async function reloadShipments() { setShipments(await api<Shipment[]>('/shipments')); }
+  function endSession() {
+    onAccount(null);
+    announceSessionChange();
+    navigate('/login', true);
+  }
   async function signOut() {
     setSigningOut(true); setSessionError('');
-    try { await api('/auth/logout', { method: 'POST' }); onAccount(null); navigate('/login', true); }
+    try { await api('/auth/logout', { method: 'POST' }); endSession(); }
     catch (failure) { setSessionError(message(failure)); setSigningOut(false); }
   }
   const shipPath = path.match(/^\/shipments\/(FL-[A-F0-9]{20})(?:\/(edit|label))?$/);
@@ -124,7 +148,7 @@ function Workspace({ account, path, search, onAccount }: { account: Account; pat
   if (loadError) content = <section className="panel form-card"><ErrorNotice>{loadError}</ErrorNotice><button className="button secondary" onClick={() => { setLoadError(''); setAttempt(attempt + 1); }}>Retry</button></section>;
   else if (!shipments) content = <div className="panel form-card" role="status">Loading shipments…</div>;
   else if (path === '/' || path === '/login' || path === '/register') content = <Dashboard {...{ account, shipments, carriers }}/>;
-  else if (path === '/settings') content = <Settings account={account} onSave={onAccount} onPasswordChange={() => { onAccount(null); navigate('/login', true); }}/>;
+  else if (path === '/settings') content = <Settings account={account} onSave={onAccount} onPasswordChange={endSession}/>;
   else if (path === '/rates') content = <RateCalculator/>;
   else if (path === '/exceptions') content = <ExceptionInbox {...{ shipments, carriers }}/>;
   else if (path === '/dispatch') content = <DispatchQueue {...{ shipments, carriers }} onDispatch={saveShipments} onReload={reloadShipments}/>;
@@ -149,7 +173,7 @@ function Workspace({ account, path, search, onAccount }: { account: Account; pat
     }
   }
   if (!content) content = <section className="panel"><Empty title={shipPath ? 'Shipment not found' : 'Page not found'}><Link className="button secondary" href="/shipments">View shipments</Link></Empty></section>;
-  return <div className="workspace">
+  return <WorkspaceApi.Provider value={api}><div className="workspace">
     <a className="skip" href="#workspace-content">Skip to content</a>
     <aside className={'sidebar' + (mobileOpen ? ' is-open' : '')} aria-label="Workspace navigation">
       <div className="sidebar-brand"><Link href="/" aria-label="Fieldline overview" onClick={() => setMobileOpen(false)}><Brand/></Link><button id="close-workspace-menu" className="icon-button mobile-only" aria-label="Close menu" onClick={() => setMobileOpen(false)}><X size={22}/></button></div>
@@ -178,7 +202,7 @@ function Workspace({ account, path, search, onAccount }: { account: Account; pat
       </header>
       <main id="workspace-content" className="workspace-content"><ErrorNotice>{sessionError}</ErrorNotice>{content}</main>
     </div>
-  </div>;
+  </div></WorkspaceApi.Provider>;
 }
 
 createRoot(document.getElementById('root')!).render(<App/>);

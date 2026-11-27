@@ -5,6 +5,10 @@ services:
     environment:
       FIELDLINE_ORIGIN: "${FIELDLINE_ORIGIN:-}"
       FIELDLINE_SECURE_COOKIES: "${FIELDLINE_SECURE_COOKIES:-0}"
+      FIELDLINE_TRUSTED_PROXIES: "${FIELDLINE_TRUSTED_PROXIES:-}"
+      FIELDLINE_SMTP_URL: "${FIELDLINE_SMTP_URL:-}"
+      FIELDLINE_SMTP_FROM: "${FIELDLINE_SMTP_FROM:-}"
+      FIELDLINE_CAPTURE_SMTP_URL: smtp://mailpit:1025
     ports:
       - "127.0.0.1:${FIELDLINE_PORT:-18084}:8080"
     volumes:
@@ -14,6 +18,12 @@ services:
       interval: 3s
       timeout: 2s
       retries: 10
+    restart: unless-stopped
+  mailpit:
+    image: ghcr.io/axllent/mailpit:v1.33.1
+    ports:
+      - "127.0.0.1:${FIELDLINE_MAIL_PORT:-18096}:8025"
+      - "127.0.0.1:${FIELDLINE_MAIL_SMTP_PORT:-18125}:1025"
     restart: unless-stopped
 volumes:
   fieldline:

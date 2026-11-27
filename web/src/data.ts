@@ -122,20 +122,20 @@ export interface DispatchResult {
 }
 
 export class ApiError extends Error {
-  constructor(public status: number, message: string) { super(message); }
+  constructor(public status: number, message: string, public code?: string) { super(message); }
 }
 
 export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
-  const response = await fetch('/api' + path, {
-    ...init,
-    headers: { Accept: 'application/json', ...(init.body ? { 'Content-Type': 'application/json' } : {}), ...init.headers },
-  });
+  const headers = new Headers(init.headers);
+  headers.set('Accept', 'application/json');
+  if (init.body) headers.set('Content-Type', 'application/json');
+  const response = await fetch('/api' + path, { ...init, headers });
   if (!response.ok) {
-    if (response.status === 401 && !path.startsWith('/auth/')) window.dispatchEvent(new Event('fieldline-session-expired'));
     const error = await response.json().catch(() => null);
-    throw new ApiError(response.status, error?.message ?? (response.status === 422 ? 'Check the form values and try again.' : 'The request could not be completed.'));
+    throw new ApiError(response.status, error?.message ?? (response.status === 422 ? 'Check the form values and try again.' : 'The request could not be completed.'), error?.code);
   }
-  return response.status === 204 ? undefined as T : await response.json() as T;
+  return response.status === 204 || (response.status === 202 && !response.headers.has('content-type'))
+    ? undefined as T : await response.json() as T;
 }
 
 export const money = (cents: number) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(cents / 100);

@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import { ArrowLeft, ClipboardList, Printer, Search, Truck } from 'lucide-react';
-import { api, carrierName, dateTime, message, type Carrier, type DispatchResult, type Manifest, type Shipment } from './data';
+import { carrierName, dateTime, message, type Carrier, type DispatchResult, type Manifest, type Shipment } from './data';
+import { useWorkspaceApi } from './workspace-session';
 import { Empty, ErrorNotice, Link, navigate } from './ui';
 
 const dispatchKey = (shipment: Shipment) => JSON.stringify([shipment.carrier, shipment.origin]);
@@ -9,6 +10,7 @@ const maxBatch = 100;
 export function DispatchQueue({ shipments, carriers, onDispatch, onReload }: {
   shipments: Shipment[]; carriers: Carrier[]; onDispatch: (shipments: Shipment[]) => void; onReload: () => Promise<void>;
 }) {
+  const api = useWorkspaceApi();
   const ready = shipments.filter(shipment => shipment.status === 'ready');
   const groups = new Map(ready.map(shipment => [dispatchKey(shipment), shipment]));
   const [group, setGroup] = useState('');
@@ -79,6 +81,7 @@ export function DispatchQueue({ shipments, carriers, onDispatch, onReload }: {
 }
 
 function ManifestHistory({ carriers }: { carriers: Carrier[] }) {
+  const api = useWorkspaceApi();
   const [manifests, setManifests] = useState<Manifest[]>();
   const [error, setError] = useState('');
   const [attempt, setAttempt] = useState(0);
@@ -89,7 +92,7 @@ function ManifestHistory({ carriers }: { carriers: Carrier[] }) {
       if (!connection.signal.aborted) setError(message(failure));
     });
     return () => connection.abort();
-  }, [attempt]);
+  }, [api, attempt]);
   const filtered = manifests?.filter(manifest => [manifest.id, manifest.reference, manifest.origin, carrierName(carriers, manifest.carrier)].join(' ').toLowerCase().includes(search.trim().toLowerCase()));
   return <section className="panel">
     <div className="panel-heading"><div><h2>Dispatch history</h2><p>Review and print recorded carrier handoffs.</p></div><ClipboardList size={20}/></div>
@@ -105,6 +108,7 @@ function ManifestHistory({ carriers }: { carriers: Carrier[] }) {
 }
 
 export function ManifestDetail({ id, carriers }: { id: string; carriers: Carrier[] }) {
+  const api = useWorkspaceApi();
   const [manifest, setManifest] = useState<Manifest>();
   const [error, setError] = useState('');
   const [attempt, setAttempt] = useState(0);
@@ -114,7 +118,7 @@ export function ManifestDetail({ id, carriers }: { id: string; carriers: Carrier
       if (!connection.signal.aborted) setError(message(failure));
     });
     return () => connection.abort();
-  }, [id, attempt]);
+  }, [api, id, attempt]);
   return <>
     <div className="page-actions label-controls"><Link className="back-link" href="/dispatch"><ArrowLeft size={16}/> Dispatch</Link>
       {manifest && <button className="button primary" onClick={() => window.print()}><Printer size={17}/> Print manifest</button>}

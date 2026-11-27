@@ -1,6 +1,7 @@
 import { useState, type FormEvent } from 'react';
 import { ArrowLeft, ContactRound, Package, Plus, Search, Trash2 } from 'lucide-react';
-import { api, message, type Contact, type ContactInput } from './data';
+import { message, type Contact, type ContactInput } from './data';
+import { useWorkspaceApi } from './workspace-session';
 import { Empty, ErrorNotice, Link, navigate } from './ui';
 
 export function AddressBook({ contacts }: { contacts: Contact[] }) {
@@ -31,6 +32,7 @@ const blankContact: ContactInput = { name: '', city: '', address: '', email: '',
 export function ContactForm({ contact, onSave, onRemove, onReload }: {
   contact?: Contact; onSave: (contact: Contact) => void; onRemove: (id: number) => void; onReload: () => Promise<void>;
 }) {
+  const api = useWorkspaceApi();
   const [input, setInput] = useState<ContactInput>(contact ?? blankContact);
   const [confirm, setConfirm] = useState(false);
   const [busy, setBusy] = useState(false);

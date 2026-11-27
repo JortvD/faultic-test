@@ -2,22 +2,40 @@
 
 import http.cookiejar
 import json
+import os
+import re
 import sys
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from urllib.error import HTTPError
-from urllib.request import HTTPCookieProcessor, Request, build_opener
+from urllib.parse import urlencode
+from urllib.request import HTTPCookieProcessor, Request, build_opener, urlopen
 
 BASE = sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:18084"
+MAIL = os.environ.get("FIELDLINE_TEST_MAIL_URL", "http://127.0.0.1:18096")
+AUTOMATIC_WORKSPACE = object()
+
+
+def inbox_code(email):
+    with urlopen(MAIL + "/api/v1/search?" + urlencode({"query": "to:" + email}), timeout=5) as response:
+        messages = json.load(response)["messages"]
+    with urlopen(MAIL + "/api/v1/message/" + messages[0]["ID"], timeout=5) as response:
+        message = json.load(response)["Text"]
+    return re.search(r"signup page: ([A-F0-9]{16})", message)[1]
 
 
 class Client:
     def __init__(self):
+        self.workspace = None
         self.browser = build_opener(HTTPCookieProcessor(http.cookiejar.CookieJar()))
 
-    def request(self, path, *, method="GET", body=None, expect=200, origin=None):
+    def request(self, path, *, method="GET", body=None, expect=200, origin=None, workspace=AUTOMATIC_WORKSPACE):
         headers = {"Accept": "application/json"}
+        if workspace is AUTOMATIC_WORKSPACE:
+            workspace = self.workspace
+        if workspace is not None:
+            headers["X-Fieldline-Workspace"] = str(workspace)
         if origin:
             headers["Origin"] = origin
         if body is not None:
@@ -36,7 +54,16 @@ class Client:
             data = response.read()
             wanted = expect if isinstance(expect, tuple) else (expect,)
             assert response.status in wanted, (path, method, expect, response.status, data)
-            return json.loads(data) if data and response.headers.get_content_type() == "application/json" else data
+            result = json.loads(data) if data and response.headers.get_content_type() == "application/json" else data
+            if response.status == 200 and path in {"/api/auth/register/verify", "/api/auth/demo", "/api/auth/login", "/api/me"}:
+                self.workspace = result["id"]
+            return result
+
+    def register(self, details):
+        assert self.request("/api/auth/register", method="POST", body={"email": details["email"]},
+                            origin=BASE, expect=202) == b""
+        code = inbox_code(details["email"])
+        return self.request("/api/auth/register/verify", method="POST", body={**details, "code": code}, origin=BASE)
 
 
 def main():
@@ -49,14 +76,32 @@ def main():
     owner, other, second_session = Client(), Client(), Client()
     credentials = {"email": f"smoke-{uuid.uuid4().hex}@example.com", "password": "a-world-of-boxes"}
     profile = {"name": "API smoke test", "company": "Fieldline verification", "sample": False}
-    owner.request("/api/auth/register", method="POST", body={**profile, **credentials}, origin=BASE)
+    registration = {**profile, **credentials}
+    assert public.request("/api/auth/register", method="POST", body=registration, origin=BASE, expect=202) == b""
+    public.request("/api/auth/login", method="POST", body=credentials, expect=401)
+    public.request("/api/auth/register/verify", method="POST", body={**registration, "code": "0000000000000000"}, expect=422)
+    code = inbox_code(credentials["email"])
+    public.request("/api/auth/register/verify", method="POST", body={**registration, "email": "wrong@example.com", "code": code}, expect=422)
+    owner.request("/api/auth/register/verify", method="POST", body={**registration, "code": code.lower()}, origin=BASE)
+    public.request("/api/auth/register/verify", method="POST", body={**registration, "code": code}, expect=422)
     assert owner.request("/api/me")["email"] == credentials["email"]
-    other.request("/api/auth/register", method="POST", body={**profile, **credentials, "email": f"second-{uuid.uuid4().hex}@example.com"})
+    assert public.request("/api/auth/register", method="POST", body=registration, origin=BASE, expect=202) == b""
+    public.request("/api/auth/register/verify", method="POST", body={**registration, "code": inbox_code(credentials["email"])}, expect=409)
+    other.register({**registration, "email": f"second-{uuid.uuid4().hex}@example.com"})
     second_session.request("/api/auth/login", method="POST", body=credentials)
     assert owner.request("/api/shipments") == []
 
     contact_input = {"name": "Private recipient", "city": "Toronto, ON", "address": "229 Private Way",
                      "email": "receiver@example.com", "phone": "416 555 0100"}
+    for path, method, body in [
+        ("/api/contacts", "POST", contact_input),
+        ("/api/shipments", "GET", None),
+        ("/api/auth/logout", "POST", None),
+    ]:
+        blocked = other.request(path, method=method, body=body, workspace=owner.workspace, expect=409)
+        assert blocked["code"] == "workspace_changed"
+    assert other.request("/api/contacts", method="POST", body=contact_input, workspace=None, expect=409)["code"] == "workspace_changed"
+    assert other.request("/api/me")["id"] != owner.workspace
     contact = owner.request("/api/contacts", method="POST", body=contact_input, expect=201)
     assert owner.request("/api/contacts") == [contact]
     assert other.request("/api/contacts") == []
@@ -72,6 +117,15 @@ def main():
     assert len(quotes) == 2
     assert all(q["carrier"]["international"] and q["chargeableKg"] == 12 for q in quotes)
     assert quotes == sorted(quotes, key=lambda quote: quote["costCents"])
+    boundary = {**lane, "international": False, "weightKg": 1, "lengthCm": 8.96, "widthCm": 156.25, "heightCm": 250}
+    exact = owner.request("/api/quotes", method="POST", body=boundary)
+    swift = next(quote for quote in exact if quote["carrier"]["id"] == "swift")
+    assert (swift["chargeableKg"], swift["costCents"]) == (70, 36000)
+    over = owner.request("/api/quotes", method="POST", body={**boundary, "lengthCm": 8.9600000001})
+    assert all(quote["carrier"]["id"] != "swift" and quote["chargeableKg"] == 70.5 for quote in over)
+    cents = owner.request("/api/quotes", method="POST", body={**boundary, "lengthCm": 23.92, "heightCm": 200})
+    atlas = next(quote for quote in cents if quote["carrier"]["id"] == "atlas")
+    assert (atlas["chargeableKg"], atlas["costCents"]) == (149.5, 22528)
     details = {**lane, "reference": "SMOKE-1", "recipient": "Private recipient",
                "deliveryAddress": "229 Private Way", "carrier": quotes[0]["carrier"]["id"],
                "shipDate": datetime.now(timezone.utc).date().isoformat()}

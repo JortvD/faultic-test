@@ -1,7 +1,10 @@
 mod auth;
 mod contacts;
+mod db_permissions;
+mod mailer;
 mod shipments;
 mod store;
+mod traffic;
 
 use std::{
     env,
@@ -29,7 +32,9 @@ use crate::store::Store;
 #[derive(Clone)]
 struct App {
     store: Store,
-    limits: Arc<Mutex<auth::Limits>>,
+    limits: Arc<Mutex<traffic::Limits>>,
+    trusted_proxies: Arc<traffic::TrustedProxies>,
+    mailer: Option<Arc<mailer::Mailer>>,
     secure_cookies: bool,
     public_origin: Option<String>,
 }
@@ -80,10 +85,10 @@ async fn ready(
 ) -> store::Result<Json<serde_json::Value>> {
     let tables = app.store.lock()?.query_row(
         "SELECT count(*) FROM sqlite_schema
-         WHERE type = 'table' AND name IN ('accounts', 'sessions', 'shipments', 'contacts', 'manifests')",
+         WHERE type = 'table' AND name IN ('accounts', 'sessions', 'shipments', 'contacts', 'manifests', 'registration_codes')",
         [], |row| row.get::<_, u32>(0),
     )?;
-    if tables != 5 {
+    if tables != 6 {
         return Err(store::Error::internal("incomplete database schema"));
     }
     Ok(Json(
@@ -96,12 +101,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let address = env::var("FIELDLINE_LISTEN").unwrap_or_else(|_| "127.0.0.1:18084".into());
     let database =
         PathBuf::from(env::var("FIELDLINE_DB").unwrap_or_else(|_| "data/fieldline.sqlite".into()));
-    if let Some(parent) = database
-        .parent()
-        .filter(|path| !path.as_os_str().is_empty())
-    {
-        std::fs::create_dir_all(parent)?;
-    }
+    db_permissions::prepare(&database)?;
     let dist = PathBuf::from(env::var("FIELDLINE_DIST").unwrap_or_else(|_| "web/dist".into()));
     let public_origin = env::var("FIELDLINE_ORIGIN")
         .ok()
@@ -109,6 +109,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let app = App {
         store: Store::open(&database)?,
         limits: Arc::default(),
+        trusted_proxies: Arc::new(traffic::TrustedProxies::parse(
+            &env::var("FIELDLINE_TRUSTED_PROXIES").unwrap_or_default(),
+        )?),
+        mailer: mailer::Mailer::from_env()?.map(Arc::new),
         secure_cookies: env::var("FIELDLINE_SECURE_COOKIES").is_ok_and(|value| value == "1")
             || public_origin
                 .as_deref()
@@ -116,7 +120,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         public_origin,
     };
     let api = Router::new()
-        .route("/auth/register", post(auth::register))
+        .route("/auth/register", post(auth::request_registration))
+        .route("/auth/register/verify", post(auth::register))
         .route("/auth/login", post(auth::login))
         .route("/auth/demo", post(auth::demo))
         .route("/auth/logout", post(auth::logout))

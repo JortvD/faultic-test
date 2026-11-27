@@ -9,11 +9,11 @@ docker compose up -d --build --wait
 curl -fsS http://127.0.0.1:18084/readyz
 ```
 
-Open http://127.0.0.1:18084. Create an account with or without sample shipments, contacts, and a dispatch record, or select **Explore demo workspace**. A demo session expires after 24 hours. Account owners can update their profile and change their password, which revokes existing sessions. Each account or demo session has its own shipment records. The `fieldline` Compose volume stores accounts, sessions, and shipments across restarts.
+Open http://127.0.0.1:18084. For a new account, copy the signup verification code from the local Mailpit inbox at http://127.0.0.1:18096. You can start with sample shipments, contacts, and a dispatch record, or select **Explore demo workspace** for temporary access. Existing accounts can still sign in with their current credentials. A demo session expires after 24 hours. Account owners can update their profile and change their password, which revokes existing sessions. Each account or demo session has its own shipment records. The `fieldline` Compose volume stores accounts, sessions, and shipments across restarts.
 
 ### Develop locally
 
-With Rust 1.100 and Node.js 24 installed, run `npm --prefix web ci` and `cargo run --locked`. Run `npm --prefix web run dev` in another terminal and open the Vite URL. To serve a production frontend directly from Rust, run `npm --prefix web run build` before starting the backend and open http://127.0.0.1:18084.
+With Rust 1.100 and Node.js 24 installed, run `npm --prefix web ci` and `cargo run --locked`. For native signup, run `docker compose up -d mailpit` and start Rust with `FIELDLINE_CAPTURE_SMTP_URL=smtp://127.0.0.1:18125`. Run `npm --prefix web run dev` in another terminal and open the Vite URL. To serve a production frontend directly from Rust, run `npm --prefix web run build` before starting the backend and open http://127.0.0.1:18084.
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
@@ -23,6 +23,14 @@ With Rust 1.100 and Node.js 24 installed, run `npm --prefix web ci` and `cargo r
 | `FIELDLINE_DIST` | `web/dist` | Native frontend build directory |
 | `FIELDLINE_ORIGIN` | Incoming host | Set to the external origin, without a trailing slash, when using a TLS reverse proxy |
 | `FIELDLINE_SECURE_COOKIES` | Enabled for HTTPS origins | Set to `1` to require HTTPS session cookies |
+| `FIELDLINE_TRUSTED_PROXIES` | Empty | Comma-separated CIDRs for reverse proxies that append the actual address of their peer to `X-Forwarded-For` |
+| `FIELDLINE_SMTP_URL` | Unset | SMTP relay URL for outbound signup mail, Use `smtps://` or `smtp://…?tls=required` and keep credentials outside the repository. |
+| `FIELDLINE_SMTP_FROM` | Unset | Sender address for the configured SMTP relay |
+| `FIELDLINE_CAPTURE_SMTP_URL` | `smtp://mailpit:1025` in Compose | Development inbox for loopback signup |
+| `FIELDLINE_MAIL_PORT` | `18096` | Compose Mailpit inbox loopback port |
+| `FIELDLINE_MAIL_SMTP_PORT` | `18125` | Compose Mailpit SMTP loopback port for native development |
+
+For an external deployment, set the public origin and configure an outbound SMTP relay. Restrict direct backend access to your proxy and trust only its actual addresses. Fieldline uses the nearest address outside the trusted proxy networks as the client address. Authenticated API writes require `X-Fieldline-Workspace` with the workspace ID from `GET /api/me`.
 
 ## Shipping workflows
 
@@ -48,7 +56,7 @@ npm --prefix web exec -- playwright install chromium
 npm --prefix web run test:browser -- http://127.0.0.1:18084
 ```
 
-The smoke script seeds isolated test accounts and exercises quotes, contacts, dispatch, tracking, and session revocation. Use a development instance.
+The smoke and browser scripts use the local Mailpit API for signup. Set `FIELDLINE_TEST_MAIL_URL` if its development inbox uses a different port. Run them against a development instance with disposable data.
 
 ## Historical Faultic fixture
 

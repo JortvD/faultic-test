@@ -15,25 +15,36 @@ use serde_json::json;
 pub type Result<T> = std::result::Result<T, Error>;
 
 #[derive(Debug)]
-pub struct Error(StatusCode, &'static str);
+pub struct Error(StatusCode, &'static str, Option<&'static str>);
 
 impl Error {
+    pub fn workspace_changed() -> Self {
+        Self(
+            StatusCode::CONFLICT,
+            "The active workspace changed. Reopen the form in your workspace.",
+            Some("workspace_changed"),
+        )
+    }
+    pub fn unavailable(message: &'static str) -> Self {
+        Self(StatusCode::SERVICE_UNAVAILABLE, message, None)
+    }
     pub fn invalid(message: &'static str) -> Self {
-        Self(StatusCode::UNPROCESSABLE_ENTITY, message)
+        Self(StatusCode::UNPROCESSABLE_ENTITY, message, None)
     }
     pub fn conflict(message: &'static str) -> Self {
-        Self(StatusCode::CONFLICT, message)
+        Self(StatusCode::CONFLICT, message, None)
     }
     pub fn unauthorized(message: &'static str) -> Self {
-        Self(StatusCode::UNAUTHORIZED, message)
+        Self(StatusCode::UNAUTHORIZED, message, None)
     }
     pub fn missing() -> Self {
-        Self(StatusCode::NOT_FOUND, "Record not found.")
+        Self(StatusCode::NOT_FOUND, "Record not found.", None)
     }
     pub fn limited() -> Self {
         Self(
             StatusCode::TOO_MANY_REQUESTS,
             "Too many attempts. Please try again later.",
+            None,
         )
     }
     pub fn internal(error: impl std::fmt::Display) -> Self {
@@ -41,6 +52,7 @@ impl Error {
         Self(
             StatusCode::INTERNAL_SERVER_ERROR,
             "An unexpected error occurred.",
+            None,
         )
     }
 }
@@ -57,7 +69,11 @@ impl From<serde_json::Error> for Error {
 }
 impl IntoResponse for Error {
     fn into_response(self) -> Response {
-        (self.0, Json(json!({"message": self.1}))).into_response()
+        let mut body = json!({"message": self.1});
+        if let Some(code) = self.2 {
+            body["code"] = json!(code);
+        }
+        (self.0, Json(body)).into_response()
     }
 }
 
@@ -76,7 +92,11 @@ pub struct Account {
 
 impl Store {
     pub fn open(path: &Path) -> rusqlite::Result<Self> {
-        let connection = Connection::open(path)?;
+        let connection = Connection::open_with_flags(
+            path,
+            (rusqlite::OpenFlags::default() - rusqlite::OpenFlags::SQLITE_OPEN_URI)
+                | rusqlite::OpenFlags::SQLITE_OPEN_NOFOLLOW,
+        )?;
         connection.execute_batch(include_str!("schema.sql"))?;
         Ok(Self(Arc::new(Mutex::new(connection))))
     }
