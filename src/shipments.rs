@@ -7,6 +7,7 @@ use axum::{
 };
 use chrono::{Duration, NaiveDate, Utc};
 use rusqlite::{Connection, OptionalExtension, params};
+use rust_decimal::{Decimal, prelude::ToPrimitive};
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -46,10 +47,14 @@ pub struct Route {
     destination: String,
     #[serde(default)]
     international: bool,
-    weight_kg: f64,
-    length_cm: f64,
-    width_cm: f64,
-    height_cm: f64,
+    #[serde(with = "rust_decimal::serde::arbitrary_precision")]
+    weight_kg: Decimal,
+    #[serde(with = "rust_decimal::serde::arbitrary_precision")]
+    length_cm: Decimal,
+    #[serde(with = "rust_decimal::serde::arbitrary_precision")]
+    width_cm: Decimal,
+    #[serde(with = "rust_decimal::serde::arbitrary_precision")]
+    height_cm: Decimal,
 }
 
 impl Route {
@@ -67,10 +72,10 @@ impl Route {
         if self.origin.eq_ignore_ascii_case(&self.destination) {
             return Err(Error::invalid("Origin and destination must differ."));
         }
-        if !(0.1..=1000.0).contains(&self.weight_kg)
+        if !(Decimal::new(1, 1)..=Decimal::from(1000)).contains(&self.weight_kg)
             || [self.length_cm, self.width_cm, self.height_cm]
                 .iter()
-                .any(|value| !(1.0..=300.0).contains(value))
+                .any(|value| !(Decimal::ONE..=Decimal::from(300)).contains(value))
         {
             return Err(Error::invalid(
                 "Use 0.1–1,000 kg and dimensions between 1 and 300 cm.",
@@ -159,7 +164,8 @@ pub struct Shipment {
     created_at: String,
     eta: NaiveDate,
     cost_cents: u64,
-    chargeable_kg: f64,
+    #[serde(with = "rust_decimal::serde::arbitrary_precision")]
+    chargeable_kg: Decimal,
     #[serde(default)]
     manifest: Option<String>,
     #[serde(flatten)]
@@ -175,7 +181,7 @@ pub struct Carrier {
     service: &'static str,
     mode: &'static str,
     days: i64,
-    max_kg: f64,
+    max_kg: u32,
     international: bool,
     #[serde(skip)]
     base_cents: u64,
@@ -190,7 +196,7 @@ const CARRIERS: [Carrier; 4] = [
         service: "Ground Standard",
         mode: "Road",
         days: 4,
-        max_kg: 150.0,
+        max_kg: 150,
         international: false,
         base_cents: 850,
         unit_cents: 145,
@@ -201,7 +207,7 @@ const CARRIERS: [Carrier; 4] = [
         service: "Air Express",
         mode: "Air",
         days: 2,
-        max_kg: 70.0,
+        max_kg: 70,
         international: true,
         base_cents: 2400,
         unit_cents: 480,
@@ -212,7 +218,7 @@ const CARRIERS: [Carrier; 4] = [
         service: "Consolidated Freight",
         mode: "Road",
         days: 6,
-        max_kg: 1000.0,
+        max_kg: 1000,
         international: true,
         base_cents: 6900,
         unit_cents: 95,
@@ -223,7 +229,7 @@ const CARRIERS: [Carrier; 4] = [
         service: "Priority Parcel",
         mode: "Road",
         days: 3,
-        max_kg: 30.0,
+        max_kg: 30,
         international: false,
         base_cents: 1250,
         unit_cents: 225,
@@ -236,14 +242,19 @@ pub struct Quote {
     carrier: Carrier,
     days: i64,
     cost_cents: u64,
-    chargeable_kg: f64,
+    #[serde(with = "rust_decimal::serde::arbitrary_precision")]
+    chargeable_kg: Decimal,
 }
 
 impl Carrier {
     fn quote(self, route: &Route) -> Option<Quote> {
-        let dimensional_weight = route.length_cm * route.width_cm * route.height_cm / 5000.0;
-        let chargeable_kg = (route.weight_kg.max(dimensional_weight) * 2.0).ceil() / 2.0;
-        if chargeable_kg > self.max_kg || (route.international && !self.international) {
+        let dimensional_weight =
+            route.length_cm * route.width_cm * route.height_cm / Decimal::from(5000);
+        let twice = Decimal::from(2);
+        let chargeable_kg = (route.weight_kg.max(dimensional_weight) * twice).ceil() / twice;
+        if chargeable_kg > Decimal::from(self.max_kg)
+            || (route.international && !self.international)
+        {
             return None;
         }
         let surcharge = if route.international { 1650 } else { 0 };
@@ -251,7 +262,9 @@ impl Carrier {
             carrier: self,
             days: self.days + if route.international { 2 } else { 0 },
             cost_cents: self.base_cents
-                + (self.unit_cents as f64 * chargeable_kg).ceil() as u64
+                + (Decimal::from(self.unit_cents) * chargeable_kg)
+                    .ceil()
+                    .to_u64()?
                 + surcharge,
             chargeable_kg,
         })
@@ -616,10 +629,10 @@ pub fn seed(db: &Connection, owner: i64) -> Result<()> {
                 origin: origin.into(),
                 destination: destination.into(),
                 international,
-                weight_kg: 4.0 + index as f64 % 16.0,
-                length_cm: 40.0,
-                width_cm: 28.0,
-                height_cm: 22.0,
+                weight_kg: Decimal::from(4 + index as u32 % 16),
+                length_cm: Decimal::from(40),
+                width_cm: Decimal::from(28),
+                height_cm: Decimal::from(22),
             },
         };
         let quote = carrier
@@ -736,7 +749,8 @@ struct ManifestItem {
     tracking: String,
     reference: String,
     destination: String,
-    weight_kg: f64,
+    #[serde(with = "rust_decimal::serde::arbitrary_precision")]
+    weight_kg: Decimal,
 }
 
 pub async fn list_manifests(
