@@ -1,0 +1,89 @@
+.planner-header-actions { align-items: end; }
+.planner-options { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.planner-option { display: grid; gap: 6px; padding: 15px; text-align: left; color: var(--ink); }
+.planner-option > strong { font-size: .95rem; margin-bottom: 4px; }
+.planner-option > span { display: flex; justify-content: space-between; align-items: baseline; gap: 6px; color: var(--muted); font-size: .83rem; }
+.planner-option b { color: var(--ink); white-space: nowrap; }
+.planner-selected { border-color: #6e956e; background: #eef5e8; }
+.planner-grid { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr); gap: 17px; align-items: start; }
+.planner-map-panel { padding-bottom: 12px; }
+.planner-map {
+  position: relative;
+  width: min(calc(100% - 26px), 490px);
+  aspect-ratio: 1;
+  margin-inline: auto;
+  isolation: isolate;
+  border: 1px solid #dce4d9;
+  border-radius: 9px;
+  overflow: hidden;
+  background: linear-gradient(90deg, #cbd5c866 1px, transparent 1px) 0 0 / 8% 8%,
+    linear-gradient(#cbd5c866 1px, transparent 1px) 0 0 / 8% 8%, #edf2e8;
+}
+.planner-water {
+  position: absolute;
+  inset: 60% -19% auto 32%;
+  height: 28%;
+  border: 1px solid #bdd6d5;
+  border-radius: 65% 40% 48% 43%;
+  background: #d7e9e7;
+  transform: rotate(-39deg);
+  pointer-events: none;
+}
+.planner-legs { position: absolute; inset: 0; pointer-events: none; }
+.planner-leg { position: absolute; height: 2px; transform-origin: left center; }
+.planner-depot,
+.planner-pin {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  display: inline-grid;
+  place-items: center;
+  border: 2px solid white;
+  color: white;
+  box-shadow: 0 1px 4px #24352d44;
+}
+.planner-depot { width: 32px; height: 32px; border-radius: 7px; background: #223e30; }
+.planner-pin { width: 27px; height: 27px; border-radius: 50%; font-size: .8rem; font-weight: 740; }
+.planner-pin:focus-visible { z-index: 1; }
+.unassigned-pin { background: #59665e; }
+.planner-map-key { display: flex; flex-wrap: wrap; gap: 12px; justify-content: center; padding: 12px 10px 0; }
+.planner-map-key span, .planner-tabs button { display: inline-flex; align-items: center; gap: 5px; color: var(--muted); font-size: .84rem; }
+.planner-map-key i, .planner-tabs i { width: 10px; height: 10px; border-radius: 50%; }
+.planner-controls { display: grid; min-width: 0; gap: 12px; }
+.planner-stops-heading { display: flex; justify-content: space-between; flex-wrap: wrap; align-items: start; gap: 8px; }
+.planner-stop-list { display: grid; max-height: 245px; overflow-y: auto; }
+.planner-stop-list button { display: flex; justify-content: space-between; align-items: center; gap: 8px; text-align: left; border: 0; border-bottom: 1px solid var(--line); background: white; padding: 8px 3px; font-size: .9rem; }
+.planner-stop-list button:hover { background: var(--canvas); }
+.planner-stop-list button span { overflow-wrap: anywhere; }
+.planner-stop-list small { color: var(--muted); white-space: nowrap; }
+.planner-tabs { display: flex; flex-wrap: wrap; gap: 7px; padding: 0 16px 12px; }
+.planner-truck-summary { display: flex; flex-wrap: wrap; gap: 14px 25px; padding: 8px 16px 15px; }
+.planner-truck-summary > span { display: grid; gap: 4px; }
+.planner-truck-summary small, .planner-review p { color: var(--muted); }
+.planner-review { border-color: #e7d5bf; }
+
+@media (max-width: 720px) {
+  .planner-grid { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 560px) {
+  .planner-options { grid-template-columns: minmax(0, 1fr); }
+  .planner-option { grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: 12px; }
+  .planner-option > strong { grid-column: 1 / -1; }
+}
+
+.planner-vehicle {
+  display: grid;
+  place-items: center;
+  position: absolute;
+  transform: translate(10%, -110%);
+  width: 23px;
+  height: 23px;
+  border-radius: 6px;
+  border: 1px solid white;
+  color: white;
+  pointer-events: none;
+  box-shadow: 0 1px 4px #24352d44;
+}
+.planner-replay { display: grid; gap: 5px; padding: 14px 18px 2px; }
+.planner-replay input[type=range] { min-height: 28px; margin: 0; border: 0; accent-color: var(--green); }
+.planner-replay p { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; font-size: .83rem; color: var(--muted); }
+.planner-replay p strong { color: var(--ink); }
